@@ -5,18 +5,15 @@ import json
 
 from ray.tune import sample_from
 
-import softlearning.algorithms.utils as alg_utils
 import softlearning.environments.utils as env_utils
-from softlearning.misc.utils import datetimestamp
+from softlearning.utils.times import datetimestamp
 
 
 DEFAULT_UNIVERSE = 'gym'
 DEFAULT_DOMAIN = 'Pendulum'
 DEFAULT_TASK = 'v0'
-DEFAULT_ALGORITHM = 'SAC'
 
 AVAILABLE_UNIVERSES = tuple(env_utils.UNIVERSES)
-AVAILABLE_ALGORITHMS = set(alg_utils.ALGORITHM_CLASSES.keys())
 
 
 def add_ray_init_args(parser):
@@ -40,7 +37,7 @@ def add_ray_init_args(parser):
         default=None,
         help=init_help_string("Resources to allocate to ray process."))
     parser.add_argument(
-        '--include-webui',
+        '--include-dashboard',
         type=str,
         default=False,
         help=init_help_string("Boolean flag indicating whether to start the"
@@ -114,7 +111,7 @@ def add_ray_tune_args(parser):
     parser.add_argument(
         '--checkpoint-frequency',
         type=int,
-        default=10000,
+        default=None,
         help=tune_help_string(
             "How many training iterations between checkpoints."
             " A value of 0 (default) disables checkpointing. If set,"
@@ -143,15 +140,14 @@ def add_ray_tune_args(parser):
             "Path to checkpoint. Only makes sense to set if running 1 trial."
             " Defaults to None."))
     parser.add_argument(
-        '--with-server',
+        '--fail-fast',
         type=lambda x: bool(strtobool(x)),
-        default=True,
-        help=tune_help_string("Starts a background Tune server. Needed for"
-                              " using the Client API."))
+        default=False,
+        help=tune_help_string("Finishes as soon as a trial fails if True."))
     parser.add_argument(
         '--server-port',
-        type=int,
-        default=4321,
+        type=lambda value: int(value) if value else None,
+        default=None,
         help=tune_help_string("Port number for launching TuneServer."))
 
     return parser
@@ -183,11 +179,7 @@ def get_parser(allow_policy_list=False):
               " constructed) piece by piece so that each"
               " experience is saved only once."))
 
-    parser.add_argument(
-        '--algorithm',
-        type=str,
-        choices=AVAILABLE_ALGORITHMS,
-        default=DEFAULT_ALGORITHM)
+    parser.add_argument('--algorithm', type=str)
     if allow_policy_list:
         parser.add_argument(
             '--policy',
@@ -208,6 +200,16 @@ def get_parser(allow_policy_list=False):
         default=datetimestamp())
     parser.add_argument(
         '--mode', type=str, default='local')
+    parser.add_argument(
+        '--run-eagerly',
+        type=lambda x: bool(strtobool(x)),
+        help="Whether to run tensorflow in eager mode.")
+    parser.add_argument(
+        '--local-dir',
+        type=str,
+        default='~/ray_results',
+        help='Destination local folder to save training results.')
+
     parser.add_argument(
         '--confirm-remote',
         type=lambda x: bool(strtobool(x)),

@@ -1,11 +1,12 @@
 """Implements the SoftlearningEnv that is usable in softlearning algorithms."""
 
 from abc import ABCMeta, abstractmethod
-from collections import defaultdict, OrderedDict
+from collections import defaultdict
 import copy
 
 import numpy as np
 import tensorflow as tf
+import tree
 from gym import spaces
 
 
@@ -65,10 +66,11 @@ class SoftlearningEnv(metaclass=ABCMeta):
         if not isinstance(self.observation_space, spaces.Dict):
             raise NotImplementedError(type(self.observation_space))
 
-        return OrderedDict((
-            (key, tf.TensorShape(space.shape))
-            for key, space in self.observation_space.spaces.items()
-        ))
+        observation_shape = tree.map_structure(
+            lambda space: tf.TensorShape(space.shape),
+            self.observation_space.spaces)
+
+        return observation_shape
 
     @property
     def action_space(self, *args, **kwargs):
@@ -76,7 +78,11 @@ class SoftlearningEnv(metaclass=ABCMeta):
 
     @property
     def action_shape(self, *args, **kwargs):
-        action_shape = tf.TensorShape(self.action_space.shape)
+        if self.action_space.shape == ():
+            assert isinstance(self.action_space, spaces.Discrete)
+            action_shape = tf.TensorShape((1, ))
+        else:
+            action_shape = tf.TensorShape(self.action_space.shape)
 
         if len(action_shape) > 1:
             raise NotImplementedError(
@@ -114,11 +120,11 @@ class SoftlearningEnv(metaclass=ABCMeta):
         raise NotImplementedError
 
     def _filter_observation(self, observation):
-        observation = type(observation)([
-            (name, value)
+        observation = type(observation)((
+            (name, np.reshape(value, self.observation_space.spaces[name].shape))
             for name, value in observation.items()
             if name in (*self.observation_keys, *self.goal_keys)
-        ])
+        ))
         return observation
 
     @abstractmethod
@@ -231,6 +237,12 @@ class SoftlearningEnv(metaclass=ABCMeta):
         aggregated_results = {}
         for key, value in results.items():
             aggregated_results[key + '-mean'] = np.mean(value)
+
+        if hasattr(self.unwrapped, 'get_path_infos'):
+            env_path_infos = self.unwrapped.get_path_infos(
+                paths, *args, **kwargs)
+
+            aggregated_results.update(env_path_infos)
 
         return aggregated_results
 

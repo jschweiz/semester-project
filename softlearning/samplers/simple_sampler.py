@@ -1,43 +1,34 @@
 from collections import defaultdict
 
-import tensorflow as tf
 import numpy as np
-from flatten_dict import flatten, unflatten
+import tree
 
-from softlearning.models.utils import flatten_input_structure
 from .base_sampler import BaseSampler
 
 
 class SimpleSampler(BaseSampler):
-    def __init__(self, latent_dim=0, session=None, **kwargs):
+    def __init__(self, **kwargs):
         super(SimpleSampler, self).__init__(**kwargs)
 
-        self._path_length = 0
-        self._path_return = 0
-        self._current_path = defaultdict(list)
         self._last_path_return = 0
         self._max_path_return = -np.inf
         self._n_episodes = 0
-        self._current_observation = None
-
-        self._latent_dim = latent_dim
-        self._current_latent = np.zeros(self._latent_dim)
         self._total_samples = 0
 
-        self._session = session
-        self.graph = None
+        self._is_first_step = True
+
+    def reset(self):
+        if self.policy is not None:
+            self.policy.reset()
+
+        self._path_length = 0
+        self._path_return = 0
+        self._current_path = []
+        self._current_observation = self.environment.reset()
 
     @property
     def _policy_input(self):
-        observation = {
-            key: self._current_observation[key][None, ...]
-            for key in self.policy.observation_keys
-        }
-        policy_inputs = flatten_input_structure({
-            **observation,
-            'env_latents': self._current_latent[None, ...],
-        })
-        return policy_inputs
+        return self._current_observation
 
     def _process_sample(self,
                         observation,
@@ -49,8 +40,8 @@ class SimpleSampler(BaseSampler):
         processed_observation = {
             'observations': observation,
             'actions': action,
-            'rewards': [reward],
-            'terminals': [terminal],
+            'rewards': np.atleast_1d(reward),
+            'terminals': np.atleast_1d(terminal),
             'next_observations': next_observation,
             'infos': info,
         }
@@ -58,12 +49,13 @@ class SimpleSampler(BaseSampler):
         return processed_observation
 
     def sample(self):
-        if self._current_observation is None:
-            self._current_observation = self.env.reset()
+        if self._is_first_step:
+            self.reset()
 
-        action = self.policy.actions_np(self._policy_input)[0]
+        action = self.policy.action(self._policy_input).numpy()
 
-        next_observation, reward, terminal, info = self.env.step(action)
+        next_observation, reward, terminal, info = self.environment.step(
+            action)
         self._path_length += 1
         self._path_return += reward
         self._total_samples += 1
@@ -77,14 +69,11 @@ class SimpleSampler(BaseSampler):
             info=info,
         )
 
-        for key, value in flatten(processed_sample).items():
-            self._current_path[key].append(value)
+        self._current_path.append(processed_sample)
 
         if terminal or self._path_length >= self._max_path_length:
-            last_path = unflatten({
-                field_name: np.array(values)
-                for field_name, values in self._current_path.items()
-            })
+            last_path = tree.map_structure(
+                lambda *x: np.stack(x, axis=0), *self._current_path)
 
             self.pool.add_path({
                 key: value
@@ -93,46 +82,22 @@ class SimpleSampler(BaseSampler):
             })
 
             self._last_n_paths.appendleft(last_path)
+
             self._max_path_return = max(self._max_path_return,
                                         self._path_return)
             self._last_path_return = self._path_return
-
-            self.policy.reset()
-            self.pool.terminate_episode()
-            self._current_observation = None
-            self._path_length = 0
-            self._path_return = 0
-
-            self._current_path = defaultdict(list)
-
             self._n_episodes += 1
 
-            if self._n_episodes > 1:
-                if self.graph == None:
-                    self.graph = tf.compat.v1.get_default_graph()
-                    self._prev_observations_pl = self.graph.get_tensor_by_name('prev_observations:0')
-                    self._prev_next_observations_pl = self.graph.get_tensor_by_name('prev_next_observations:0')
-                    self._prev_actions_pl = self.graph.get_tensor_by_name('prev_actions:0')
-                    self._prev_rewards_pl = self.graph.get_tensor_by_name('prev_rewards:0')
+            self.pool.terminate_episode()
 
-                batch = self.pool.batch_from_index(self._n_episodes - 1)
-                feed_dict = {
-                    self._prev_observations_pl: batch['observations']['observations'],
-                    self._prev_next_observations_pl: batch['next_observations']['observations'],
-                    self._prev_actions_pl: batch['actions'],
-                    self._prev_rewards_pl: batch['rewards'],
-                }
-                self._current_latent = self._session.run('latent_prior/priors:0', feed_dict=feed_dict)[0]
+            self._is_first_step = True
+            # Reset is done in the beginning of next episode, see above.
+
         else:
             self._current_observation = next_observation
+            self._is_first_step = False
 
-        return self._n_episodes, next_observation, reward, terminal, info
-
-    def random_batch(self, batch_size=None, **kwargs):
-        batch_size = batch_size or self._batch_size
-        # observation_keys = getattr(self.env, 'observation_keys', None)
-
-        return self.pool.random_batch(batch_size, **kwargs)
+        return next_observation, reward, terminal, info
 
     def get_diagnostics(self):
         diagnostics = super(SimpleSampler, self).get_diagnostics()
@@ -144,21 +109,3 @@ class SimpleSampler(BaseSampler):
         })
 
         return diagnostics
-
-    def __getstate__(self):
-        state = {
-            key: value for key, value in self.__dict__.items()
-            if key not in ('env', 'policy', 'pool',
-                'graph', '_prev_observations_pl', '_prev_next_observations_pl', '_prev_actions_pl', '_prev_rewards_pl', '_session')
-        }
-
-        return state
-
-    def __setstate__(self, state):
-        self.__dict__.update(state)
-
-        self.env = None
-        self.policy = None
-        self.pool = None
-        self.graph = None
-        self._n_episodes = 0
