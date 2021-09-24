@@ -11,18 +11,6 @@ from .rl_algorithm import RLAlgorithm
 
 from softlearning.models.feedforward import feedforward_model
 
-STRATEGY_DIM = 1 
-#STRATEGY_OBS_IDXS = [11, 12] # This should be of length 2 * STRATEGY_DIM since we keep current and previous strategies
-STRATEGY_OBS_IDXS = [0, 1] # CHANGE IF USING STABILIZING ON SAC SIDE
-
-SEPARATE_RL_AND_REPRESENTATION = False
-STRAIGHT_THROUGH = True
-GUMBEL_TEMP = 1.0
-DISCRETE_LATENTS = True
-
-VANILLA_SAC = False # set latents to be 0
-STABILIZE_ON_SAC_SIDE = True
-
 def td_target(reward, discount, next_value):
     return reward + discount * next_value
 
@@ -49,7 +37,7 @@ class SAC(RLAlgorithm):
 
             lr=3e-4,
             reward_scale=1.0,
-            target_entropy=0, #'auto',
+            target_entropy="auto",
             discount=0.99,
             tau=5e-3,
             target_update_interval=1,
@@ -57,20 +45,20 @@ class SAC(RLAlgorithm):
             reparameterize=False,
 
             latent_dim=8,
-            mean_only=True,
-            recon_loss=False,
-            clip_grad=True,
             encoder_size=(128,128),
             decoder_size=(128,128),
+            
+            encode_obs_act=True,
+            encode_rew=True,
+            encode_next_obs=False,
+
+            recon_rew=True,
+            recon_next_obs=False,
+            continuous=True,
+
             pretrain_iters=0,
             per_task_batch_size=8,
-            state_dim=2,
             episode_length=50,
-
-            stabilize=False,
-            stabilize_weight=0,
-            end_stabilize_weight=0,
-            num_anneal_episodes=0,
 
             save_full_state=False,
             **kwargs,
@@ -99,14 +87,6 @@ class SAC(RLAlgorithm):
 
         super(SAC, self).__init__(**kwargs)
 
-        self.stabilize = stabilize
-        self.stabilize_weight = stabilize_weight
-        #self.stabilize_weight = tf.Variable(stabilize_weight, trainable=False)
-        self.start_stabilize_weight = stabilize_weight
-        self.end_stabilize_weight = end_stabilize_weight
-        self.num_anneal_episodes = num_anneal_episodes
-        self.train_step = 0
-
         self._training_environment = training_environment
         self._evaluation_environment = evaluation_environment
         self._policy = policy
@@ -126,27 +106,30 @@ class SAC(RLAlgorithm):
             if target_entropy == 'auto'
             else target_entropy)
 
-        self._state_dim = state_dim
+        self._state_dim = self._training_environment.observation_space['observations'].shape[0]
         self._action_dim = self._training_environment.action_space.shape[0]
         self._latent_dim = latent_dim
         self._pretrain_iters = pretrain_iters
         self._encoder_size = encoder_size
         self._decoder_size = decoder_size
+
+        self._encode_obs_act = encode_obs_act
+        self._encode_rew = encode_rew
+        self._encode_next_obs = encode_next_obs
+        self._recon_rew = recon_rew
+        self._recon_next_obs = recon_next_obs
+        self._continuous = continuous
+
         self._episode_length = episode_length
-
-        self._mean_only = mean_only
-        self._recon_loss = recon_loss
-        self._clip_grad = clip_grad
-
         self._per_task_batch_size = per_task_batch_size
 
-        if self._clip_grad:
-            self._clip_value = 1e-2
+        self._encoder_optimizer = tf.compat.v1.train.AdamOptimizer(
+            learning_rate=self._Q_lr,
+            name='Q_encoder_optimizer')
 
-        if self._recon_loss:
-            self._decoder_optimizer = tf.compat.v1.train.AdamOptimizer(
-                learning_rate=1e-4, 
-                name="decoder_optimizer")
+        self._decoder_optimizer = tf.compat.v1.train.AdamOptimizer(
+            learning_rate=1e-3,
+            name="decoder_optimizer")
 
         self._discount = discount
         self._tau = tau
@@ -162,15 +145,6 @@ class SAC(RLAlgorithm):
     def _build(self):
         super(SAC, self)._build()
 
-        self._placeholders['stabilize_weight'] = tf.compat.v1.placeholder(
-                tf.float32, shape=(), name='stabilize_weight',
-            )
-        self._placeholders['true_strategies'] = tf.compat.v1.placeholder(
-                tf.float32,
-                shape=(None, 2 * STRATEGY_DIM), 
-                name='true_strategies',
-            )
-
         self._init_encoder_update()
         self._init_actor_update()
         self._init_critic_update()
@@ -183,7 +157,7 @@ class SAC(RLAlgorithm):
         }
         policy_inputs = flatten_input_structure({
             **observations,
-            'env_latents': self.next_latents, 
+            'env_latents': self.next_latents,
         })
 
         next_actions = self._policy.actions(policy_inputs)
@@ -195,7 +169,7 @@ class SAC(RLAlgorithm):
         }
         next_Q_observations = flatten_input_structure({
             **next_Q_observations,
-            'env_latents': self.next_latents, 
+            'env_latents': self.next_latents,
         })
         next_Q_inputs = flatten_input_structure(
             {'observations': next_Q_observations, 'actions': next_actions})
@@ -206,14 +180,8 @@ class SAC(RLAlgorithm):
 
         terminals = tf.cast(self._placeholders['terminals'], next_values.dtype)
 
-        
-        curr_reward = self._placeholders['rewards']
-        if STABILIZE_ON_SAC_SIDE:
-            if self.stabilize:
-                change_in_latents = tf.norm(self.next_latents - self.latents, ord='euclidean', axis=-1, keepdims=True)
-                curr_reward = (1.0 - self._placeholders['stabilize_weight']) * curr_reward - (self._placeholders['stabilize_weight'] * change_in_latents)
         Q_target = td_target(
-            reward=self._reward_scale * curr_reward,
+            reward=self._reward_scale * self._placeholders['rewards'],
             discount=self._discount,
             next_value=(1 - terminals) * next_values)
 
@@ -259,30 +227,12 @@ class SAC(RLAlgorithm):
             for i, (Q, Q_loss, Q_optimizer)
             in enumerate(zip(self._Qs, Q_losses, self._Q_optimizers)))
 
-        # Comment this out to stop updating the encoder during training
-        '''encoder_optimizer = tf.compat.v1.train.AdamOptimizer(
-            learning_rate=1e-4, #self._Q_lr,
-            name='Q_encoder_optimizer')'''
-
-        # UNCOMMENT for latent representation training
-        '''if self._clip_grad:
-            gradients, variables = zip(*encoder_optimizer.compute_gradients(
-                tf.reduce_sum(Q_losses),
-                var_list=self._encoder_net.trainable_variables))
-            self._enc_Q_grad_norm = tf.compat.v1.global_norm(gradients)
-            gradients = [tf.clip_by_value(grad, -self._clip_value, self._clip_value) for grad in gradients]
-            # gradients = [tf.clip_by_norm(grad, self._clip_value) for grad in gradients]
-            self._enc_Q_grad_norm_clipped = tf.compat.v1.global_norm(gradients)
-            self._Q_enc_training_op = encoder_training_op = encoder_optimizer.apply_gradients(zip(gradients, variables))
-        else:
-            self._Q_enc_training_op = encoder_training_op = encoder_optimizer.minimize(
-                loss=tf.reduce_sum(Q_losses),
-                var_list=self._encoder_net.trainable_variables)'''
+        self._Q_enc_training_op = encoder_training_op = self._encoder_optimizer.minimize(
+            loss=tf.reduce_sum(Q_losses),
+            var_list=self._encoder_net.trainable_variables)
 
         self._training_ops.update({'Q': tf.group(Q_training_ops)})
-        
-        # Comment this out to stop updating the encoder during RL training
-        #self._training_ops.update({'Q_encoder': encoder_training_op}) 
+        self._training_ops.update({'Q_encoder': encoder_training_op})
 
     def _init_actor_update(self):
         """Create minimization operations for policy and entropy.
@@ -341,7 +291,7 @@ class SAC(RLAlgorithm):
         }
         Q_observations = flatten_input_structure({
             **Q_observations,
-            'env_latents': self.latents, 
+            'env_latents': self.latents,
         })
         Q_inputs = flatten_input_structure({
             'observations': Q_observations, 'actions': actions})
@@ -363,113 +313,68 @@ class SAC(RLAlgorithm):
             learning_rate=self._policy_lr,
             name="policy_optimizer")
 
-        if self._clip_grad:
-            gradients, variables = zip(*self._policy_optimizer.compute_gradients(
-                policy_loss,
-                var_list=self._policy.trainable_variables))
-            self._policy_grad_norm = tf.compat.v1.global_norm(gradients)
-            gradients = [tf.clip_by_value(grad, -self._clip_value, self._clip_value) for grad in gradients]
-            # gradients = [tf.clip_by_norm(grad, self._clip_value) for grad in gradients]
-            self._policy_grad_norm_clipped = tf.compat.v1.global_norm(gradients)
-            self._policy_train_op = policy_train_op = self._policy_optimizer.apply_gradients(zip(gradients, variables))
-        else:
-            self._policy_train_op = policy_train_op = self._policy_optimizer.minimize(
-                loss=policy_loss,
-                var_list=self._policy.trainable_variables)
+        self._policy_train_op = policy_train_op = self._policy_optimizer.minimize(
+            loss=policy_loss,
+            var_list=self._policy.trainable_variables)
 
         self._training_ops.update({'policy_train_op': policy_train_op})
 
     def _init_encoder_update(self):
+        encoder_inputs = {}
+        prev_encoder_inputs = {}
+        input_size = 0
+
         observations = {
             name: self._placeholders['observations'][name]
             for name in self._policy.observation_keys
         }
-        next_observations = {
-            'next_{}'.format(name): self._placeholders['next_observations'][name]
-            for name in self._policy.observation_keys
-        }
-        encoder_inputs = flatten_input_structure({
-            **observations,
-            **next_observations,
-            'actions': self._placeholders['actions'],
-            'rewards': self._placeholders['rewards'],
-        })
-        encoder_inputs = tf.reshape(tf.concat(encoder_inputs, axis=-1),
-            [-1, self._per_task_batch_size * (2 * self._state_dim + self._action_dim + 1)]
-        )
-
-        with tf.variable_scope('context_encoder'):
-            if not self._mean_only:
-                self._encoder_net = feedforward_model(
-                    hidden_layer_sizes=self._encoder_size,
-                    output_size=2 * self._latent_dim)
-                params = self._encoder_net(encoder_inputs)
-                mu = params[:, :self._latent_dim]
-                log_sigma_sq = params[:, self._latent_dim:]
-                eps = tf.random.normal(shape=tf.shape(mu))
-                next_latents = mu + eps * tf.sqrt(tf.exp(log_sigma_sq))
-            else:
-                self._encoder_net = feedforward_model(
-                    hidden_layer_sizes=self._encoder_size,
-                    output_size=self._latent_dim)
-                mu = self._encoder_net(encoder_inputs)
-                next_latents = mu
-
-                
-                if DISCRETE_LATENTS:
-                    
-                    next_latent_gumbel = tfp.distributions.RelaxedOneHotCategorical(
-                        temperature=GUMBEL_TEMP, logits=mu, probs=None, validate_args=False, allow_nan_stats=True,
-                        name='RelaxedOneHotCategorical'
-                    )
-                    next_latents = next_latent_gumbel.sample()
-                    if STRAIGHT_THROUGH:
-                        argmax_next_latent_gumbel = tf.math.argmax(input = next_latents, axis=-1)
-                        argmax_next_latent_gumbel = tf.reshape(argmax_next_latent_gumbel, [-1])
-                        argmax_next_latent_gumbel = tf.one_hot(argmax_next_latent_gumbel, depth=self._latent_dim)
-                        
-                        next_latents = tf.stop_gradient(argmax_next_latent_gumbel - next_latents) + next_latents
-
         prev_observations = {
             name: self._placeholders['prev_observations'][name]
+            for name in self._policy.observation_keys
+        }
+        if self._encode_obs_act:
+            encoder_inputs.update(observations)
+            # encoder_inputs.update({'actions': self._placeholders['actions']})
+
+            prev_encoder_inputs.update(prev_observations)
+            # prev_encoder_inputs.update({'prev_actions': self._placeholders['prev_actions']})
+
+            input_size += self._state_dim #+ self._action_dim
+
+        if self._encode_rew:
+            encoder_inputs.update({'rewards': self._placeholders['rewards']})
+            prev_encoder_inputs.update({'prev_rewards': self._placeholders['prev_rewards']})
+            input_size += 1
+
+        next_observations = {
+            'next_{}'.format(name): self._placeholders['next_observations'][name]
             for name in self._policy.observation_keys
         }
         prev_next_observations = {
             'next_{}'.format(name): self._placeholders['prev_next_observations'][name]
             for name in self._policy.observation_keys
         }
-        encoder_inputs = flatten_input_structure({
-            **prev_observations,
-            **prev_next_observations,
-            'actions': self._placeholders['prev_actions'],
-            'rewards': self._placeholders['prev_rewards'],
-        })
-        encoder_inputs = tf.reshape(tf.concat(encoder_inputs, axis=-1), 
-            [-1, self._per_task_batch_size * (2 * self._state_dim + self._action_dim + 1)]
+        if self._encode_next_obs:
+            encoder_inputs.update(next_observations)
+            prev_encoder_inputs.update(prev_next_observations)
+            input_size += self._state_dim
+
+        encoder_inputs = flatten_input_structure(encoder_inputs)
+        encoder_inputs = tf.reshape(tf.concat(encoder_inputs, axis=-1),
+            [-1, self._per_task_batch_size * input_size]
+        )
+
+        prev_encoder_inputs = flatten_input_structure(prev_encoder_inputs)
+        prev_encoder_inputs = tf.reshape(tf.concat(prev_encoder_inputs, axis=-1),
+            [-1, self._per_task_batch_size * input_size]
         )
 
         with tf.variable_scope('context_encoder'):
-            if not self._mean_only:
-                params = self._encoder_net(encoder_inputs)
-                mu = params[:, :self._latent_dim]
-                log_sigma_sq = params[:, self._latent_dim:]
-                eps = tf.random.normal(shape=tf.shape(mu))
-                latents = mu + eps * tf.sqrt(tf.exp(log_sigma_sq))
-            else:
-                mu = self._encoder_net(encoder_inputs)
-                latents = mu
-
-                if DISCRETE_LATENTS:
-                    latent_gumbel = tfp.distributions.RelaxedOneHotCategorical(
-                        temperature=GUMBEL_TEMP, logits=mu, probs=None, validate_args=False, allow_nan_stats=True,
-                        name='RelaxedOneHotCategorical'
-                    )
-                    latents = latent_gumbel.sample()
-                    if STRAIGHT_THROUGH:
-                        argmax_latent_gumbel = tf.math.argmax(input = latents, axis=-1)
-                        argmax_latent_gumbel = tf.reshape(argmax_latent_gumbel, [-1])
-                        argmax_latent_gumbel = tf.one_hot(argmax_latent_gumbel, depth=self._latent_dim)
-                        latents = tf.stop_gradient(argmax_latent_gumbel - latents) + latents
+            self._encoder_net = feedforward_model(
+                hidden_layer_sizes=self._encoder_size,
+                output_size=self._latent_dim)
+            next_latents = self._encoder_net(encoder_inputs)
+            latents = self._encoder_net(prev_encoder_inputs)
 
         with tf.variable_scope('latent_prior'):
             latent_prior = tf.identity(latents, name='priors')
@@ -477,55 +382,54 @@ class SAC(RLAlgorithm):
         latents = tf.expand_dims(latents, axis=1)
         latents = tf.reshape(tf.tile(latents, [1, self._per_task_batch_size, 1]), [-1, self._latent_dim])
         self.latents = latents
-
         
-        next_latents = tf.expand_dims(next_latents, axis=1)
-        next_latents = tf.reshape(tf.tile(next_latents, [1, self._per_task_batch_size, 1]), [-1, self._latent_dim])
+        if self._continuous:
+            next_latents = tf.expand_dims(next_latents, axis=1)
+            next_latents = tf.reshape(tf.tile(next_latents, [1, self._per_task_batch_size, 1]), [-1, self._latent_dim])
+            is_last = tf.equal(tf.reshape(self._placeholders['timesteps'], [-1]), self._episode_length - 1)
+            self.next_latents = tf.where(is_last, next_latents, latents)
+        else:
+            self.next_latents = latents
 
-        self.latent_only = latents 
-        self.next_latent_only = next_latents 
+        decoder_inputs = flatten_input_structure({
+            **observations,
+            # 'actions': self._placeholders['actions'],
+            'latents': self.latents,
+        })
+        decoder_inputs = tf.concat(decoder_inputs, axis=-1)
 
-        is_last = tf.equal(tf.reshape(self._placeholders['timesteps'], [-1]), self._episode_length - 1)
-        self.next_latents = tf.where(is_last, next_latents, latents)
-        #self.next_latents = latents
+        with tf.variable_scope('context_decoder'):
+            self._decoder_net = feedforward_model(
+                hidden_layer_sizes=self._decoder_size,
+                output_size=self._state_dim + 1)
+            out = self._decoder_net(decoder_inputs)
+            r_next_obs = self._placeholders['observations']['observations'] + out[:, :-1]
+            r_rew = out[:, -1:]
 
+        next_obs_labels = self._placeholders['next_observations']['observations']
+        reward_labels = self._placeholders['rewards']
 
-        if VANILLA_SAC:
-            self.latents = tf.zeros_like(self.latents)
-            self.next_latents = tf.zeros_like(self.next_latents)
+        self._decoder_losses = 0
 
-        if self._recon_loss:
-            decoder_inputs = flatten_input_structure({
-                **observations,
-                **next_observations, 
-                'actions': self._placeholders['actions'],
-                'latents': self.latents,
-            })
-            decoder_inputs = tf.concat(decoder_inputs, axis=-1)
+        rew_diff = r_rew - reward_labels
+        next_obs_diff = r_next_obs - next_obs_labels
+        
+        if self._continuous:
+            rew_diff = tf.where(is_last, tf.zeros_like(rew_diff), rew_diff)
+            next_obs_diff = tf.where(is_last, tf.zeros_like(next_obs_diff), next_obs_diff)
 
-            with tf.variable_scope('context_decoder'):
-                self._decoder_net = feedforward_model(
-                    hidden_layer_sizes=self._decoder_size,
-                    output_size=1) 
-                    #output_size=self._state_dim + 1)
-                out = self._decoder_net(decoder_inputs)
-                #r_next_obs = self._placeholders['observations']['observations'] + out[:, :-1] # Predict transition function
-                r_rew = out[:, -1:]
+        if self._recon_rew:
+            self._decoder_losses += tf.reduce_sum(tf.square(rew_diff), axis=-1)
+        if self._recon_next_obs:
+            self._decoder_losses += 0.05 * tf.reduce_sum(tf.square(next_obs_diff), axis=-1)
 
-            next_obs_labels = self._placeholders['next_observations']['observations']
-            reward_labels = self._placeholders['rewards']
-            
-            self._decoder_losses = tf.reduce_sum(tf.square(r_rew - reward_labels), axis=-1)
+        decoder_loss = tf.reduce_mean(self._decoder_losses)
+        
+        self._decoder_train_op = decoder_train_op = self._decoder_optimizer.minimize(
+            decoder_loss,
+            var_list=self._decoder_net.trainable_variables + self._encoder_net.trainable_variables)
 
-            decoder_loss = tf.reduce_mean(self._decoder_losses)
-            
-            self._decoder_train_op = decoder_train_op = self._decoder_optimizer.minimize(
-                decoder_loss,
-                var_list=self._decoder_net.trainable_variables + self._encoder_net.trainable_variables)
-
-            # Comment this out to stop updating the decoder during RL training
-            if not SEPARATE_RL_AND_REPRESENTATION and not VANILLA_SAC:
-                self._training_ops.update({'decoder_train_op': decoder_train_op})
+        self._training_ops.update({'decoder_train_op': decoder_train_op})
 
     def _init_diagnostics_ops(self):
         diagnosables = OrderedDict((
@@ -533,20 +437,8 @@ class SAC(RLAlgorithm):
             ('Q_loss', self._Q_losses),
             ('policy_loss', self._policy_losses),
             ('alpha', self._alpha),
+            ('decoder_loss', self._decoder_losses)
         ))
-
-        if self._clip_grad:
-            diagnosables.update(OrderedDict([
-                #('enc_Q_grad_norm', self._enc_Q_grad_norm),
-                #('enc_Q_grad_norm_clipped', self._enc_Q_grad_norm_clipped),
-                ('policy_grad_norm', self._policy_grad_norm),
-                ('policy_grad_norm_clipped', self._policy_grad_norm_clipped),
-            ]))
-
-        if self._recon_loss:
-            diagnosables.update(OrderedDict([
-                ('decoder_loss', self._decoder_losses)
-            ]))
 
         diagnostic_metrics = OrderedDict((
             ('mean', tf.reduce_mean),
@@ -573,43 +465,19 @@ class SAC(RLAlgorithm):
                 for source, target in zip(source_params, target_params)
             ])
 
-    def _update_stabilize_weight(self):
-        
-        start = self.start_stabilize_weight
-        end = self.end_stabilize_weight
-        nsteps = self.num_anneal_episodes
-        new_stabilize_weight = None
-        if self.train_step <= nsteps:
-            new_stabilize_weight = start + (end - start) * self.train_step / nsteps
-        else:
-            new_stabilize_weight = end
-        
-        self.stabilize_weight = new_stabilize_weight
-        
-        self.train_step += 1
-
     def _do_training(self, iteration, batch):
         """Runs the operations for updating training and target ops."""
         feed_dict = self._get_feed_dict(iteration, batch)
 
         if iteration < self._pretrain_iters:
-            train_ops = []
-            #train_ops = [self._training_ops['Q']]
-            #train_ops = [self._Q_enc_training_op, self._training_ops['Q']] 
-            if self._recon_loss:
-                train_ops.append(self._decoder_train_op)
+            train_ops = [self._Q_enc_training_op, self._training_ops['Q'], self._decoder_train_op]
             self._session.run(train_ops, feed_dict)
-
         else:
             self._session.run(self._training_ops, feed_dict)
 
-        # Update stabilize weight:
-        if iteration % self._episode_length == 0:
-            self._update_stabilize_weight()
-
         if iteration % self._target_update_interval == 0:
             # Run target ops here.
-            self._update_target() 
+            self._update_target()
 
     def _get_feed_dict(self, iteration, batch):
         """Construct a TensorFlow feed dictionary from a sample batch."""
@@ -626,14 +494,6 @@ class SAC(RLAlgorithm):
         if iteration is not None:
             feed_dict[self._placeholders['iteration']] = iteration
 
-        
-        feed_dict[self._placeholders['stabilize_weight']] = self.stabilize_weight
-
-        # Reward comes from whether the next true strategies are stable
-        # Reward comes from current observations
-        feed_dict[self._placeholders['true_strategies']] = batch_flat[('next_observations', 'observations')][:, STRATEGY_OBS_IDXS]
-
-
         return feed_dict
 
     def get_diagnostics(self,
@@ -647,7 +507,8 @@ class SAC(RLAlgorithm):
         """
 
         feed_dict = self._get_feed_dict(iteration, batch)
-        
+        # TODO(hartikainen): We need to unwrap self._diagnostics_ops from its
+        # tensorflow `_DictWrapper`.
         diagnostics = self._session.run({**self._diagnostics_ops}, feed_dict)
 
         observations = {
@@ -656,7 +517,7 @@ class SAC(RLAlgorithm):
         }
         inputs = flatten_input_structure({
             **observations,
-            'env_latents': self._session.run(self.latents, feed_dict), 
+            'env_latents': self._session.run(self.latents, feed_dict),
         })
 
         diagnostics.update(OrderedDict([
@@ -678,6 +539,8 @@ class SAC(RLAlgorithm):
                 f'Q_optimizer_{i}': optimizer
                 for i, optimizer in enumerate(self._Q_optimizers)
             },
+            '_encoder_optimizer': self._encoder_optimizer,
+            '_decoder_optimizer': self._decoder_optimizer,
             '_log_alpha': self._log_alpha,
         }
 

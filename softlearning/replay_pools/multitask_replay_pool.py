@@ -3,15 +3,11 @@ from gym.spaces import Dict
 
 from .simple_replay_pool import SimpleReplayPool
 
-EXP_HORIZON = 50 # point mass and speaker listener
-#EXP_HORIZON = 10 # DRIVING
-
-
 
 class MultitaskReplayPool(object):
     def __init__(self,
                  environment,
-                 total_tasks=4000,
+                 total_tasks,
                  episode_length=50,
                  per_task_batch_size=8,
                  *args,
@@ -41,11 +37,6 @@ class MultitaskReplayPool(object):
     def terminate_episode(self):
         self._task_pools[self._current_task].terminate_episode()
         self._current_task += 1
-        if self._current_task >= self._total_tasks:
-
-            self._environment.save_gif_interactions()
-            self._environment.PCA_plot_predicted_latents()
-            1/0 # terminate training
 
     @property
     def size(self):
@@ -79,31 +70,16 @@ class MultitaskReplayPool(object):
         tasks = self.random_task_indices(batch_size // self._per_task_batch_size)
         for idx in tasks:
             episode_length = self._task_pools[idx - 1].size
-            #prev_indices = np.random.randint(0, episode_length, self._per_task_batch_size)
-
-            prev_indices = None
-            if EXP_HORIZON == 50:
-                prev_indices = (np.arange(self._per_task_batch_size) + 1) * 3
-            else:
-                prev_indices = np.arange(self._per_task_batch_size)
+            prev_indices = np.random.randint(0, episode_length - 1, self._per_task_batch_size)
             prev_indices[-1] = episode_length - 1
 
-
             episode_length = self._task_pools[idx].size
-            #indices = np.random.randint(0, episode_length, self._per_task_batch_size)
-            #indices = np.arange(self._per_task_batch_size) + 1
-            indices = None
-            if EXP_HORIZON == 50:
-                indices = (np.arange(self._per_task_batch_size) + 1) * 3
-            else:
-                indices = np.arange(self._per_task_batch_size)
+            indices = np.random.randint(0, episode_length - 1, self._per_task_batch_size)
             indices[-1] = episode_length - 1
-
-            #print(prev_indices, indices)
-            
 
             prev_task_batch = self._task_pools[idx - 1].batch_by_indices(prev_indices)
             task_batch = self._task_pools[idx].batch_by_indices(indices)
+
             batch['timesteps'].append(np.expand_dims(indices, axis=-1))
 
             for key, value in prev_task_batch.items():
@@ -123,17 +99,35 @@ class MultitaskReplayPool(object):
                 batch[key]['observations'] = np.concatenate(batch[key]['observations'], 0)
             else:
                 batch[key] = np.concatenate(batch[key], 0)
-        # print(batch['prev_next_observations']['observations'][:, [9, 10]])
-        # exit()
         return batch
 
     def batch_from_index(self, task_index):
         episode_length = self._task_pools[task_index].size
-        #indices = np.random.randint(0, episode_length, self._per_task_batch_size)
-        indices = None
-        if EXP_HORIZON == 50:
-            indices = (np.arange(self._per_task_batch_size) + 1) * 3
-        else:
-            indices = np.arange(self._per_task_batch_size)
+        indices = np.random.randint(0, episode_length - 1, self._per_task_batch_size)
         indices[-1] = episode_length - 1
-        return self._task_pools[task_index].batch_by_indices(indices)
+
+        batch = {
+            'observations': {'observations': []},
+            'next_observations': {'observations': []},
+            'actions': [],
+            'rewards': [],
+            'terminals': [],
+            'timesteps': [],
+        }
+
+        task_batch = self._task_pools[task_index].batch_by_indices(indices)
+        batch['timesteps'].append(np.expand_dims(indices, axis=-1))
+
+        for key, value in task_batch.items():
+            if key in ['observations', 'next_observations']:
+                batch[key]['observations'].append(task_batch[key]['observations'])
+            elif key in ['actions', 'rewards', 'terminals']:
+                batch[key].append(task_batch[key])
+
+        for key in batch:
+            if key in ['observations', 'next_observations',]:
+                batch[key]['observations'] = np.concatenate(batch[key]['observations'], 0)
+            else:
+                batch[key] = np.concatenate(batch[key], 0)
+
+        return batch

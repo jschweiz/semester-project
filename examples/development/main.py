@@ -111,6 +111,8 @@ class ExperimentRunner(tune.Trainable):
             'sampler': self.sampler,
             'algorithm': self.algorithm,
             'policy_weights': self.policy.get_weights(),
+            'encoder_weights': self.algorithm._encoder_net.get_weights(),
+            'decoder_weights': self.algorithm._decoder_net.get_weights(),
         }
 
     def _save_value_functions(self, checkpoint_dir):
@@ -244,6 +246,9 @@ class ExperimentRunner(tune.Trainable):
         # TODO(hartikainen): target Qs should either be checkpointed or pickled.
         for Q, Q_target in zip(self.algorithm._Qs, self.algorithm._Q_targets):
             Q_target.set_weights(Q.get_weights())
+
+        self.algorithm._encoder_net.set_weights(picklable['encoder_weights'])
+        self.algorithm._decoder_net.set_weights(picklable['decoder_weights'])
 
         self._built = True
 

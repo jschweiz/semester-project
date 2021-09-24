@@ -1,9 +1,9 @@
-name: softlearning_ctrl
+name: sac_lili
 channels:
 - defaults
 - conda-forge
 dependencies:
-- python=3.7.3 
+- python=3.7.3
 - pip>=19.1
 - conda>=4.6
 - patchelf=0.9  # only works on Linux; comment this line out on Mac

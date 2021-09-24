@@ -5,88 +5,21 @@ import numpy as np
 
 from softlearning.misc.utils import get_git_rev, deep_update
 
-
-stabilize = True # Set to False for vanilla LILI
-stabilize_weight = 1.0
-end_stabilize_weight = 1.0
-num_anneal_episodes = 300
-pretrain_iters = 0            # number of pretraining steps for encoder & decoder
-min_episode_log = 1100 # saves images of episodes after this number 
-gif_index_from_end = 100 # saves images of episodes into a gif with the last gif_index_from_end episodes
-#exp_name = "changing_strategy_random_goal_speaker_listener_0"
-exp_name = "circle_3_goals_beta_10"
-save_path = "/Users/Documents/"
-
 DEFAULT_KEY = "__DEFAULT_KEY__"
 
-M = 128
+M = 256
 REPARAMETERIZE = True
 NUM_CHECKPOINTS = 10
 NUM_COUPLING_LAYERS = 2
 
-#Point2d Suboptimal
-#Hyperparameters for our algorithm
-# latent_dim = 3                  # dimension of latent space
-# mean_only = True                # True: infer mean of latent; False: infer mean and variance 
-# recon_loss = True               # True: include reconstruction loss
-# encoder_size = (128,128)
-# decoder_size = (128,128)
-
-# clip_grad = True                # clip gradient (clipping value set in sac.py
-# task_batch_size = 16            # number of tasks to train on in each batch
-
-
-# per_task_batch_size = 16         # number of (s,a,s',r) tuples to sample from each task
-
-
-# # Changed to 5 to include step time
-# state_dim = 2 
-# episode_length = 50 
-# total_tasks = 5000
-
-# For Driving (2D)
-# latent_dim = 2                  # dimension of latent space
-# mean_only = True                # True: infer mean of latent; False: infer mean and variance 
-# recon_loss = True               # True: include reconstruction loss, False to remove representation learning
-# encoder_size = (256,256)
-# decoder_size = (256,256)
-# clip_grad = True                # clip gradient (clipping value set in sac.py
-# task_batch_size = 16            # number of tasks to train on in each batch
-# per_task_batch_size = 9         # number of (s,a,s',r) tuples to sample from each task
-# state_dim = 6 #5 6 when using ORACLE_STRATEGIES in driving.py
-# episode_length = 10 
-# total_tasks = 2500
-
-#For SpeakerListener
-latent_dim = 3                  # dimension of latent space
-mean_only = True                # True: infer mean of latent; False: infer mean and variance 
-recon_loss = True               # True: include reconstruction loss, False to remove representation learning
-encoder_size = (256,256)
-decoder_size = (256,256)
-clip_grad = True                # clip gradient (clipping value set in sac.py
-task_batch_size = 16            # number of tasks to train on in each batch
-per_task_batch_size = 16         # number of (s,a,s',r) tuples to sample from each task
-state_dim = 10 # 11 for oracle observation, 9 otherwise
-episode_length = 50 
-total_tasks = 1200
-
-
-## for the CARLA
-# latent_dim = 8                  # dimension of latent space
-# mean_only = True                # True: infer mean of latent; False: infer mean and variance 
-# recon_loss = True               # True: include reconstruction loss
-# encoder_size = (128,128)
-# decoder_size = (128,128)
-# pretrain_iters = 0              # number of pretraining steps for encoder & decoder
-# clip_grad = True                # clip gradient (clipping value set in sac.py
-# task_batch_size = 16            # number of tasks to train on in each batch
-# per_task_batch_size = 20        # number of (s,a,s',r) tuples to sample from each task
-
-# state_dim = 12
-# episode_length = 200
-# total_tasks = 1000
-
-assert per_task_batch_size < episode_length
+# Hyperparameters for LILI
+continuous = True
+pretrain_iters = 10000
+task_batch_size = 32
+per_task_batch_size = 8
+latent_dim = 8
+episode_length = 50
+total_interactions = 4000
 
 GAUSSIAN_POLICY_PARAMS_BASE = {
     'type': 'GaussianPolicy',
@@ -103,7 +36,7 @@ ALGORITHM_PARAMS_BASE = {
     'type': 'SAC',
 
     'kwargs': {
-        'epoch_length': 150,
+        'epoch_length': 1000,
         'train_every_n_steps': 1,
         'n_train_repeat': 1,
         'eval_render_kwargs': {},
@@ -114,22 +47,11 @@ ALGORITHM_PARAMS_BASE = {
         'tau': 5e-3,
         'reward_scale': 1.0,
 
-        'latent_dim': latent_dim,
-        'mean_only': mean_only,
-        'recon_loss': recon_loss,
-        'encoder_size': encoder_size,
-        'decoder_size': decoder_size,
+        'continuous': continuous,
         'pretrain_iters': pretrain_iters,
-        'clip_grad': clip_grad,
         'per_task_batch_size': per_task_batch_size,
-
-        'state_dim': state_dim,
+        'latent_dim': latent_dim,
         'episode_length': episode_length,
-
-        'stabilize': stabilize,
-        'stabilize_weight': stabilize_weight,
-        'end_stabilize_weight': end_stabilize_weight,
-        'num_anneal_episodes': num_anneal_episodes,
     }
 }
 
@@ -142,7 +64,7 @@ ALGORITHM_PARAMS_ADDITIONAL = {
             'lr': 3e-4,
             'target_update_interval': 1,
             'tau': 5e-3,
-            'target_entropy': 'auto',
+            'target_entropy': 0,
             'action_prior': 'uniform',
             'n_initial_exploration_steps': int(1e3),
         }
@@ -179,47 +101,23 @@ MAX_PATH_LENGTH_PER_UNIVERSE_DOMAIN_TASK = {
     DEFAULT_KEY: 1000,
     'gym': {
         DEFAULT_KEY: 1000,
+        'EpisodicPointMass': {
+            DEFAULT_KEY: episode_length,
+        },
+        'ContinuousPointMass': {
+            DEFAULT_KEY: episode_length,
+        },
         'Point2DEnv': {
-            DEFAULT_KEY: episode_length,
-        },
-        'LunarReacherContinuous': {
-            DEFAULT_KEY: episode_length,
-        },
-        'CarlaEnv': {
-            DEFAULT_KEY: episode_length,
-        },
-        'SpeakerListenerEnv': {
-            DEFAULT_KEY: episode_length,
+            DEFAULT_KEY: 50,
         },
         'Pendulum': {
             DEFAULT_KEY: 200,
-        },
-        'HalfCheetah': {
-            DEFAULT_KEY: 50,
-        },
-        'SawyerReachPushPickPlaceEnv': {
-            DEFAULT_KEY: 150,
-        },
-        'HalfCheetah-Wind': {
-            DEFAULT_KEY: 50,
-        },
-        'HalfCheetah-Vel': {
-            DEFAULT_KEY: 50,
-        },
-        'HalfCheetah-WindVel': {
-            DEFAULT_KEY: 50,
-        },
-        'MinitaurGoalVelEnv': {
-            DEFAULT_KEY: 100,
-        },
-        'SawyerReachXYZEnv': {
-            DEFAULT_KEY: episode_length,
         },
     },
 }
 
 NUM_EPOCHS_PER_UNIVERSE_DOMAIN_TASK = {
-    DEFAULT_KEY: int(5e5),
+    DEFAULT_KEY: 200,
     'gym': {
         DEFAULT_KEY: 200,
         'Swimmer': {
@@ -255,44 +153,8 @@ NUM_EPOCHS_PER_UNIVERSE_DOMAIN_TASK = {
         'HandReach': {
             DEFAULT_KEY: int(1e4),
         },
-        'Point2DEnv': {
-            DEFAULT_KEY: int(10000),
-        },
-        'Reacher': {
-            DEFAULT_KEY: int(200),
-        },
         'Pendulum': {
             DEFAULT_KEY: 10,
-        },
-        'SawyerReachPushPickPlaceEnv': {
-            DEFAULT_KEY: int(3e3),
-        },
-        'HalfCheetah-Wind': {
-            DEFAULT_KEY: int(3e3),
-        },
-        'HalfCheetah-Vel': {
-            DEFAULT_KEY: int(3e3),
-        },
-        'HalfCheetah-WindVel': {
-            DEFAULT_KEY: int(3e3),
-        },
-        'MinitaurGoalVelEnv': {
-            DEFAULT_KEY: int(3e3),
-        },
-        'LunarReacherContinuous': {
-            DEFAULT_KEY: int(3e3),
-        },
-        'CarlaEnv':{ 
-            DEFAULT_KEY: int(5e6)
-        },
-        'SpeakerListenerEnv':{ 
-            DEFAULT_KEY: int(100000)
-        },
-        'Driving':{ 
-            DEFAULT_KEY: int(100000)
-        },
-        'SawyerReachXYZEnv': {
-            DEFAULT_KEY: int(100000), 
         },
     },
     'dm_control': {
@@ -365,60 +227,11 @@ ENVIRONMENT_PARAMS_PER_UNIVERSE_DOMAIN_TASK = {
         },
         'Point2DEnv': {
             'Default-v0': {
-                
-                #'observation_keys': ('observations', 'desired_goal'),
+                # 'observation_keys': ('observation', 'desired_goal'),
                 'observation_keys': ('observations',),
-                'stabilize': stabilize, 
-                'stabilize_weight': stabilize_weight,
-                'episode_length': episode_length,
-                'min_episode_log': min_episode_log,
-                'gif_index_from_end': gif_index_from_end,
-                'exp_name': exp_name,
-                'save_path': save_path,
             },
             'Wall-v0': {
                 'observation_keys': ('observation', 'desired_goal'),
-            },
-        },
-        'SpeakerListenerEnv': {
-            'Default-v0': {
-                
-                #'observation_keys': ('observations', 'desired_goal'),
-                'observation_keys': ('observations',),
-                'stabilize': stabilize, 
-                'stabilize_weight': stabilize_weight,
-                'episode_length': episode_length,
-                'min_episode_log': min_episode_log,
-                'gif_index_from_end': gif_index_from_end,
-                'exp_name': exp_name,
-                'save_path': save_path,
-            },
-        },
-        'SawyerReachXYZEnv': {
-            'Default-v0': {
-                
-                #'observation_keys': ('observations', 'desired_goal'),
-                'observation_keys': ('observations',),
-                'episode_length': episode_length,
-                'min_episode_log': min_episode_log,
-                'gif_index_from_end': gif_index_from_end,
-                'exp_name': exp_name,
-                'save_path': save_path,
-            },
-        },
-        'Driving': {
-            'v0': {
-                
-                #'observation_keys': ('observations', 'desired_goal'),
-                'min_episode_log': min_episode_log,
-                'gif_index_from_end': gif_index_from_end,
-                'exp_name': exp_name,
-                'save_path': save_path,
-            },
-        },
-        'LunarReacherContinuous': {
-            'v2': {
-                'observation_keys': ('observations',),
             },
         },
         'Sawyer': {
@@ -575,11 +388,11 @@ def get_variant_spec_base(universe, domain, task, policy, algorithm):
                 'universe': universe,
                 'kwargs': get_environment_params(universe, domain, task),
             },
-            #'evaluation': tune.sample_from(lambda spec: (
-            #    spec.get('config', spec)
-            #    ['environment_params']
-            #    ['training']
-            #)),
+            'evaluation': tune.sample_from(lambda spec: (
+                spec.get('config', spec)
+                ['environment_params']
+                ['training']
+            )),
         },
         'policy_params': get_policy_params(universe, domain, task),
         'exploration_policy_params': {
@@ -609,7 +422,7 @@ def get_variant_spec_base(universe, domain, task, policy, algorithm):
             'kwargs': {
                 'max_size': int(episode_length),
                 'episode_length': episode_length,
-                'total_tasks': total_tasks,
+                'total_tasks': total_interactions,
                 'per_task_batch_size': per_task_batch_size,
             }
         },

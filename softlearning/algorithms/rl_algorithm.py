@@ -478,8 +478,8 @@ class RLAlgorithm(Checkpointable):
     def __getstate__(self):
         state = {
             '_epoch_length': self._epoch_length,
-            '_epoch': (
-                self._epoch + int(self._timestep >= self._epoch_length)),
+            # '_epoch': (
+            #     self._epoch + int(self._timestep >= self._epoch_length)),
             '_timestep': self._timestep % self._epoch_length,
             '_num_train_steps': self._num_train_steps,
         }

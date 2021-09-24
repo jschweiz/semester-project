@@ -72,12 +72,17 @@ GENERAL_ENVIRONMENT_SPECS = (
     {
         'id': 'Driving-v0',
         'entry_point': f'{CUSTOM_GYM_ENVIRONMENTS_PATH}.driving:Driving',
-        'kwargs': {'oracle': False,} # for now  
+        'kwargs': {'oracle': True,} # for now  
     },
     {
-        'id': 'Carla-v0',
-        'entry_point': f'{CUSTOM_GYM_ENVIRONMENTS_PATH}.carla:CarlaEnv',
-        'kwargs': {'oracle': False, 'render': True, 'should_save': False} # for now  
+        'id': 'EpisodicPointMass-v0',
+        'entry_point': f'{CUSTOM_GYM_ENVIRONMENTS_PATH}.point_mass:PointMassEnv',
+        'kwargs': {'include_final_transition': False}
+    },
+    {
+        'id': 'ContinuousPointMass-v0',
+        'entry_point': f'{CUSTOM_GYM_ENVIRONMENTS_PATH}.point_mass:PointMassEnv',
+        'kwargs': {'include_final_transition': True}
     },
 )
 
@@ -89,14 +94,6 @@ MULTIWORLD_ENVIRONMENT_SPECS = (
     {
         'id': 'Point2DEnv-Wall-v0',
         'entry_point': 'multiworld.envs.pygame.point2d:Point2DWallEnv'
-    },
-    {
-        'id': 'SpeakerListenerEnv-Default-v0',
-        'entry_point': 'multiworld.envs.pygame.speaker_listener_env:SpeakerListenerEnv'
-    },
-    {
-        'id': 'SawyerReachXYZEnv-Default-v0',
-        'entry_point': 'multiworld.envs.mujoco.sawyer_xyz.sawyer_reach:SawyerReachXYZEnv'
     },
 )
 

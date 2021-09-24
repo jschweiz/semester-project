@@ -1,8 +1,4 @@
-# softlearning-ctrl
-
-Running locally:
-`softlearning run_example_local examples.development --universe=gym --domain=Point2DEnv --task=Default-v0
---exp-name=exp-name --checkpoint-frequency=200`
+# sac-lili
 
 Files:
 - `softlearning/algorithms/sac.py`: implements SAC and latent model
@@ -12,8 +8,10 @@ Files:
 Setup:
 
 ```
-cd softlearning-ctrl
+cd softlearning
 conda env create -f environment.yml
-conda activate softlearning
+conda activate sac_lili
 pip install -e .
 ```
+
+The hyperparameters for LILI are in `examples/development/variants.py`.

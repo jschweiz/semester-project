@@ -122,10 +122,7 @@ class SimpleSampler(BaseSampler):
                     self._prev_actions_pl: batch['actions'],
                     self._prev_rewards_pl: batch['rewards'],
                 }
-                self._current_latent = self._session.run('latent_prior/priors:0', feed_dict=feed_dict)[0] # numpy array of shape (latent_dim,)
-               
-                self.env.predicted_latents.append(np.copy(self._current_latent))
-
+                self._current_latent = self._session.run('latent_prior/priors:0', feed_dict=feed_dict)[0]
         else:
             self._current_observation = next_observation
 

@@ -39,7 +39,6 @@ softlearning/environments/adapters/robosuite_adapter.py
 softlearning/environments/adapters/softlearning_env.py
 softlearning/environments/dm_control/__init__.py
 softlearning/environments/gym/__init__.py
-softlearning/environments/gym/carla.py
 softlearning/environments/gym/driving.py
 softlearning/environments/gym/multi_goal.py
 softlearning/environments/gym/mujoco/__init__.py
