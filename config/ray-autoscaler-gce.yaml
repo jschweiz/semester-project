@@ -93,17 +93,18 @@ worker_nodes:
 # dictionary from REMOTE_PATH: LOCAL_PATH, e.g.
 file_mounts: {
     "/tmp/current_git_HEAD": "<TODO>/.git/HEAD",
-    "~/softlearning": "<TODO>",
     "~/.mujoco/mjkey.txt": "~/.mujoco/mjkey.txt",
 }
 
 # List of shell commands to run to set up nodes.
 setup_commands:
     - >-
-        pip install -U -e ~/softlearning
-
-initialization_commands:
-  - gcloud auth configure-docker
+        (test -e ~/softlearning
+        || git clone git@github.com:rail-berkeley/softlearning.git)
+        && cd ~/softlearning
+        && git fetch --all
+        && git_HEAD=`cat /tmp/current_git_HEAD | cut -d \  -f 2`
+        && git checkout ${git_HEAD#"refs/heads/"}
 
 # Custom commands that will be run on the head node after common setup.
 head_setup_commands: []
@@ -114,20 +115,17 @@ worker_setup_commands: []
 # Command to start ray on the head node. You don't need to change this.
 head_start_ray_commands:
     - ray stop
-    - ray start
+    - >-
+        ray start
         --head
         --redis-port=6379
         --object-manager-port=8076
         --autoscaling-config=~/ray_bootstrap_config.yaml
-        --internal-config='{
-            "num_heartbeats_timeout":300,
-            "raylet_heartbeat_timeout_milliseconds":1000
-        }'
 
 # Command to start ray on worker nodes. You don't need to change this.
 worker_start_ray_commands:
     - ray stop
     - >-
         ray start
-        --address=$RAY_HEAD_IP:6379
+        --redis-address=$RAY_HEAD_IP:6379
         --object-manager-port=8076

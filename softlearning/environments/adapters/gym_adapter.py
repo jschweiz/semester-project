@@ -9,8 +9,8 @@ from gym.envs.mujoco.mujoco_env import MujocoEnv
 
 from .softlearning_env import SoftlearningEnv
 from softlearning.environments.gym import register_environments
-from softlearning.environments.gym.wrappers import RescaleObservation
-from softlearning.utils.gym import is_continuous_space
+from softlearning.environments.gym.wrappers import (
+    NormalizeActionWrapper, PixelObservationWrapper)
 
 
 def parse_domain_task(gym_id):
@@ -52,8 +52,7 @@ class GymAdapter(SoftlearningEnv):
                  task,
                  *args,
                  env=None,
-                 rescale_action_range=(-1.0, 1.0),
-                 rescale_observation_range=None,
+                 normalize=True,
                  observation_keys=(),
                  goal_keys=(),
                  unwrap_time_limit=True,
@@ -62,8 +61,7 @@ class GymAdapter(SoftlearningEnv):
         assert not args, (
             "Gym environments don't support args. Use kwargs instead.")
 
-        self.rescale_action_range = rescale_action_range
-        self.rescale_observation_range = rescale_observation_range
+        self.normalize = normalize
         self.unwrap_time_limit = unwrap_time_limit
 
         super(GymAdapter, self).__init__(
@@ -89,21 +87,11 @@ class GymAdapter(SoftlearningEnv):
             # depends on time rather than state).
             env = env.env
 
-        if rescale_observation_range:
-            env = RescaleObservation(env, *rescale_observation_range)
-
-        if rescale_action_range and is_continuous_space(env.action_space):
-            env = wrappers.RescaleAction(env, *rescale_action_range)
-
-        # TODO(hartikainen): We need the clip action wrapper because sometimes
-        # the tfp.bijectors.Tanh() produces values strictly greater than 1 or
-        # strictly less than -1, which causes the env fail without clipping.
-        # The error is in the order of 1e-7, which should not cause issues.
-        # See https://github.com/tensorflow/probability/issues/664.
-        env = wrappers.ClipAction(env)
+        if normalize:
+            env = NormalizeActionWrapper(env)
 
         if pixel_wrapper_kwargs is not None:
-            env = wrappers.PixelObservationWrapper(env, **pixel_wrapper_kwargs)
+            env = PixelObservationWrapper(env, **pixel_wrapper_kwargs)
 
         self._env = env
 

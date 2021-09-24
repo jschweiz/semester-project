@@ -51,7 +51,7 @@ class GoalReplayPool(FlexibleReplayPool):
             'actions': Field(
                 name='actions',
                 dtype=action_space.dtype,
-                shape=environment.action_shape),
+                shape=action_space.shape),
             'rewards': Field(
                 name='rewards',
                 dtype='float32',

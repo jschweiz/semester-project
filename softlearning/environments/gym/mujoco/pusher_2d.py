@@ -1,20 +1,26 @@
 import os.path as osp
 
 import numpy as np
-from gym import utils
 from gym.envs.mujoco.mujoco_env import MujocoEnv
 
-from softlearning.utils.misc import PROJECT_PATH
+from serializable import Serializable
+
+from softlearning.misc.utils import PROJECT_PATH
 from softlearning.environments.helpers import random_point_in_circle
 
 
-class Pusher2dEnv(MujocoEnv, utils.EzPickle):
+class Pusher2dEnv(Serializable, MujocoEnv):
     """Two-dimensional Pusher environment
 
     Pusher2dEnv is a two-dimensional 3-DoF manipulator. Task is to slide a
     cylinder-shaped object, or a 'puck', to a target coordinates.
-    """
 
+    Note: Serializable has to be the first super class for classes extending
+    MujocoEnv (or at least occur before MujocoEnv). Otherwise MujocoEnv calls
+    Serializable.__init__ (from MujocoEnv.__init__), and the Serializable
+    attributes (_Serializable__args and _Serializable__kwargs) will get
+    overwritten.
+    """
     MODEL_PATH = osp.abspath(
         osp.join(PROJECT_PATH, 'models', 'pusher_2d.xml'))
 
@@ -40,7 +46,7 @@ class Pusher2dEnv(MujocoEnv, utils.EzPickle):
         goal_distance_coeff ('float'): Coefficient for the object-to-goal
             distance cost.
         """
-        utils.EzPickle.__init__(**locals())
+        self._Serializable__initialize(locals())
 
         self._goal_mask = [coordinate != 'any' for coordinate in goal]
         self._goal = np.array(goal)[self._goal_mask].astype(np.float32)
@@ -147,7 +153,7 @@ class ForkReacherEnv(Pusher2dEnv):
                  arm_object_distance_cost_coeff=0.0,
                  *args,
                  **kwargs):
-        utils.EzPickle.__init__(**locals())
+        self._Serializable__initialize(locals())
 
         self._arm_goal_distance_cost_coeff = arm_goal_distance_cost_coeff
         self._arm_object_distance_cost_coeff = arm_object_distance_cost_coeff

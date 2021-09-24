@@ -12,9 +12,6 @@ from .utils import rollout
 
 class RemoteSampler(BaseSampler):
     def __init__(self, **kwargs):
-        raise NotImplementedError(
-            "TODO(hartikainen): There's a bug here that causes tf to end up in"
-            " a RecursionError. This should be fixed/refactored before usage.")
         super(RemoteSampler, self).__init__(**kwargs)
 
         self._remote_environment = None
@@ -37,9 +34,9 @@ class RemoteSampler(BaseSampler):
         initialized = ray.get(self._remote_environment.initialized.remote())
         assert initialized, initialized
 
-    def initialize(self, environment, policy, pool):
-        super(RemoteSampler, self).initialize(environment, policy, pool)
-        self._create_remote_environment(environment, policy)
+    def initialize(self, env, policy, pool):
+        super(RemoteSampler, self).initialize(env, policy, pool)
+        self._create_remote_environment(env, policy)
 
     def wait_for_path(self, timeout=1):
         if self._remote_path is None:
@@ -104,7 +101,7 @@ class _RemoteEnv(object):
         gpu_options = tf.GPUOptions(allow_growth=True)
         self._session = tf.Session(
             config=tf.ConfigProto(gpu_options=gpu_options))
-        tf.compat.v1.keras.backend.set_session(self._session)
+        tf.keras.backend.set_session(self._session)
 
         self._env = pickle.loads(env_pkl)
         self._policy = pickle.loads(policy_pkl)

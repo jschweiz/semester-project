@@ -13,7 +13,6 @@ There are two types of functions in this file:
     arguments and options.
 """
 
-import copy
 import importlib
 import multiprocessing
 import os
@@ -22,10 +21,9 @@ from pprint import pformat
 
 import ray
 from ray import tune
-from ray.autoscaler._private.commands import exec_cluster
+from ray.autoscaler.commands import exec_cluster
 
-from softlearning.utils.times import datetimestamp
-from softlearning.utils.misc import PROJECT_PATH
+from softlearning.misc.utils import datetimestamp, PROJECT_PATH
 
 
 AUTOSCALER_DEFAULT_CONFIG_FILE_GCE = os.path.join(
@@ -67,25 +65,15 @@ def add_command_line_args_to_variant_spec(variant_spec, command_line_args):
         ),
     })
 
-    if (command_line_args.mode == 'debug'
-        and ('run_eagerly' not in command_line_args
-             or command_line_args.run_eagerly is None)):
-        variant_spec['run_params']['run_eagerly'] = True
-    elif 'run_eagerly' in command_line_args:
-        variant_spec['run_params']['run_eagerly'] = (
-            command_line_args.run_eagerly)
-
     variant_spec['restore'] = command_line_args.restore
 
     return variant_spec
 
 
 def generate_experiment_kwargs(variant_spec, command_line_args):
-    local_dir = command_line_args.local_dir
-    if command_line_args.mode == 'debug':
-        local_dir = os.path.join(local_dir, 'debug')
+    # TODO(hartikainen): Allow local dir to be modified through cli args
     local_dir = os.path.join(
-        local_dir,
+        '/scr/annie/lili/ray_results',
         command_line_args.universe,
         command_line_args.domain,
         command_line_args.task)
@@ -95,14 +83,6 @@ def generate_experiment_kwargs(variant_spec, command_line_args):
         command_line_args.trial_gpus,
         command_line_args.trial_extra_cpus,
         command_line_args.trial_extra_gpus)
-    upload_dir = (
-        os.path.join(
-            command_line_args.upload_dir,
-            command_line_args.universe,
-            command_line_args.domain,
-            command_line_args.task)
-        if command_line_args.upload_dir
-        else None)
 
     datetime_prefix = datetimestamp()
     experiment_id = '-'.join((datetime_prefix, command_line_args.exp_name))
@@ -112,7 +92,7 @@ def generate_experiment_kwargs(variant_spec, command_line_args):
 
     if command_line_args.video_save_frequency is not None:
         assert 'algorithm_params' in variant_spec
-        variant_spec['algorithm_params']['config']['video_save_frequency'] = (
+        variant_spec['algorithm_params']['kwargs']['video_save_frequency'] = (
             command_line_args.video_save_frequency)
 
     def create_trial_name_creator(trial_name_template=None):
@@ -122,7 +102,7 @@ def generate_experiment_kwargs(variant_spec, command_line_args):
         def trial_name_creator(trial):
             return trial_name_template.format(trial=trial)
 
-        return trial_name_creator
+        return tune.function(trial_name_creator)
 
     experiment_kwargs = {
         'name': experiment_id,
@@ -130,7 +110,7 @@ def generate_experiment_kwargs(variant_spec, command_line_args):
         'config': variant_spec,
         'local_dir': local_dir,
         'num_samples': command_line_args.num_samples,
-        'upload_dir': upload_dir,
+        'upload_dir': command_line_args.upload_dir,
         'checkpoint_freq': (
             variant_spec['run_params']['checkpoint_frequency']),
         'checkpoint_at_end': (
@@ -232,83 +212,49 @@ def run_example_local(example_module_name, example_argv, local_mode=False):
         num_gpus=example_args.gpus,
         resources=example_args.resources or {},
         local_mode=local_mode,
-        include_dashboard=example_args.include_dashboard,
-        _temp_dir=example_args.temp_dir)
+        include_webui=example_args.include_webui,
+        temp_dir=example_args.temp_dir)
 
     tune.run(
         trainable_class,
         **experiment_kwargs,
+        with_server=example_args.with_server,
         server_port=example_args.server_port,
-        fail_fast=example_args.fail_fast,
         scheduler=None,
         reuse_actors=True)
 
 
 def run_example_debug(example_module_name, example_argv):
-    """The debug mode sets runs up in order to enable use of debugger.
+    """The debug mode limits tune trial runs to enable use of debugger.
 
-    The debug mode should allow easy switch from parallelized to
+    The debug mode should allow easy switch between parallelized and
     non-parallelized runs such that the debugger can be reasonably used when
-    running the code. In practice, we default to running tensorflow in eager
-    mode (i.e. `tf.config.experimental_run_functions_eagerly(True)`) and
-    set initialize ray with `local_mode=True`.
+    running the code. In practice, this allocates all the cpus available in ray
+    such that only a single trial can run at once.
 
-    TODO(hartikainen): This probably doesn't need to allocate any resources
-    anymore. If it does, it should allocate a custom "debug_resource" instead
+    TODO(hartikainen): This should allocate a custom "debug_resource" instead
     of all cpus once ray local mode supports custom resources.
     """
 
-    example_module = importlib.import_module(example_module_name)
-    example_args = example_module.get_parser().parse_args(example_argv)
+    debug_example_argv = []
+    for option in example_argv:
+        if '--trial-cpus' in option:
+            available_cpus = multiprocessing.cpu_count()
+            debug_example_argv.append(f'--trial-cpus={available_cpus}')
+        elif '--upload-dir' in option:
+            print(f"Ignoring {option} due to debug mode.")
+            continue
+        else:
+            debug_example_argv.append(option)
 
-    debug_args = copy.copy(example_args)
-
-    if 'trial_cpus' in debug_args:
-        available_cpus = multiprocessing.cpu_count()
-        debug_args.trial_cpus = available_cpus
-
-    if 'server_port' in debug_args:
-        print(f"Ignoring 'server_port' due to debug mode.")
-    debug_args.server_port = None
-
-    if 'max_failures' in debug_args:
-        print(f"Ignoring 'max_failures' due to debug mode.")
-    debug_args.max_failures = 0
-
-    if 'upload_dir' in debug_args:
-        print(f"Ignoring 'upload_dir' due to debug mode.")
-    debug_args.upload_dir = None
-
-    debug_args.fail_fast = True
-
-
-    variant_spec = example_module.get_variant_spec(debug_args)
-    trainable_class = example_module.get_trainable_class(debug_args)
-
-    experiment_kwargs = generate_experiment_kwargs(variant_spec, debug_args)
-
-    ray.init(
-        num_cpus=debug_args.cpus,
-        num_gpus=debug_args.gpus,
-        resources=debug_args.resources or {},
-        local_mode=True,
-        include_dashboard=debug_args.include_dashboard,
-        _temp_dir=debug_args.temp_dir)
-
-    tune.run(
-        trainable_class,
-        **experiment_kwargs,
-        server_port=debug_args.server_port,
-        fail_fast=debug_args.fail_fast,
-        scheduler=None,
-        reuse_actors=True)
+    run_example_local(example_module_name, debug_example_argv, local_mode=True)
 
 
 def run_example_cluster(example_module_name, example_argv):
     """Run example on cluster mode.
 
     This functions is very similar to the local mode, except that it
-    correctly sets the ray address to make ray/tune work on a cluster.
+    correctly sets the redis address to make ray/tune work on a cluster.
     """
     example_module = importlib.import_module(example_module_name)
 
@@ -318,21 +264,21 @@ def run_example_cluster(example_module_name, example_argv):
 
     experiment_kwargs = generate_experiment_kwargs(variant_spec, example_args)
 
-    address = ray.services.get_node_ip_address() + ':6379'
+    redis_address = ray.services.get_node_ip_address() + ':6379'
 
     ray.init(
-        address=address,
+        redis_address=redis_address,
         num_cpus=example_args.cpus,
         num_gpus=example_args.gpus,
         local_mode=False,
-        include_dashboard=example_args.include_dashboard,
-        _temp_dir=example_args.temp_dir)
+        include_webui=example_args.include_webui,
+        temp_dir=example_args.temp_dir)
 
     tune.run(
         trainable_class,
         **experiment_kwargs,
+        with_server=example_args.with_server,
         server_port=example_args.server_port,
-        fail_fast=example_args.fail_fast,
         scheduler=None,
         queue_trials=True,
         reuse_actors=True)
@@ -403,7 +349,8 @@ def launch_example_gce(*args, config_file, **kwargs):
 
     See `launch_example_cluster` for further details.
     """
-    config_file = config_file or AUTOSCALER_DEFAULT_CONFIG_FILE_GCE
+    config_file = (
+        config_file or AUTOSCALER_DEFAULT_CONFIG_FILE_GCE)
 
     return launch_example_cluster(
         *args,
@@ -420,7 +367,8 @@ def launch_example_ec2(*args, config_file, **kwargs):
 
     See `launch_example_cluster` for further details.
     """
-    config_file = config_file or AUTOSCALER_DEFAULT_CONFIG_FILE_EC2
+    config_file = (
+        config_file or AUTOSCALER_DEFAULT_CONFIG_FILE_EC2)
 
     launch_example_cluster(
         *args,

@@ -1,17 +1,15 @@
 import argparse
+from distutils.util import strtobool
 import json
 import os
-from pathlib import Path
 import pickle
 
-import pandas as pd
+import tensorflow as tf
 
 from softlearning.environments.utils import get_environment_from_params
-from softlearning import policies
+from softlearning.policies.utils import get_policy_from_variant
 from softlearning.samplers import rollouts
-from softlearning.utils.tensorflow import set_gpu_memory_growth
-from softlearning.utils.video import save_video
-from .main import ExperimentRunner
+from softlearning.misc.utils import save_video
 
 
 DEFAULT_RENDER_KWARGS = {
@@ -30,86 +28,53 @@ def parse_args():
                         type=json.loads,
                         default='{}',
                         help="Kwargs for rollouts renderer.")
-    parser.add_argument('--video-save-path',
-                        type=Path,
-                        default=None)
+    parser.add_argument('--deterministic', '-d',
+                        type=lambda x: bool(strtobool(x)),
+                        nargs='?',
+                        const=True,
+                        default=True,
+                        help="Evaluate policy deterministically.")
 
     args = parser.parse_args()
 
     return args
 
 
-def load_variant_progress_metadata(checkpoint_path):
-    checkpoint_path = checkpoint_path.rstrip('/')
-    trial_path = os.path.dirname(checkpoint_path)
+def simulate_policy(args):
+    session = tf.keras.backend.get_session()
+    checkpoint_path = args.checkpoint_path.rstrip('/')
+    experiment_path = os.path.dirname(checkpoint_path)
 
-    variant_path = os.path.join(trial_path, 'params.pkl')
+    variant_path = os.path.join(experiment_path, 'params.pkl')
     with open(variant_path, 'rb') as f:
         variant = pickle.load(f)
 
-    metadata_path = os.path.join(checkpoint_path, ".tune_metadata")
-    if os.path.exists(metadata_path):
-        with open(metadata_path, "rb") as f:
-            metadata = pickle.load(f)
-    else:
-        metadata = None
+    with session.as_default():
+        pickle_path = os.path.join(checkpoint_path, 'checkpoint.pkl')
+        with open(pickle_path, 'rb') as f:
+            picklable = pickle.load(f)
 
-    progress_path = os.path.join(trial_path, 'progress.csv')
-    progress = pd.read_csv(progress_path)
-
-    return variant, progress, metadata
-
-
-def load_environment(variant):
     environment_params = (
-        variant['environment_params']['training']
+        variant['environment_params']['evaluation']
         if 'evaluation' in variant['environment_params']
         else variant['environment_params']['training'])
+    evaluation_environment = get_environment_from_params(environment_params)
 
-    environment = get_environment_from_params(environment_params)
-    return environment
+    policy = (
+        get_policy_from_variant(variant, evaluation_environment))
+    policy.set_weights(picklable['policy_weights'])
 
+    render_kwargs = {**DEFAULT_RENDER_KWARGS, **args.render_kwargs}
 
-def load_policy(checkpoint_dir, variant, environment):
-    policy_params = variant['policy_params'].copy()
-    policy_params['config'] = {
-        **policy_params['config'],
-        'action_range': (environment.action_space.low,
-                         environment.action_space.high),
-        'input_shapes': environment.observation_shape,
-        'output_shape': environment.action_shape,
-    }
+    with policy.set_deterministic(args.deterministic):
+        paths = rollouts(args.num_rollouts,
+                         evaluation_environment,
+                         policy,
+                         path_length=args.max_path_length,
+                         render_kwargs=render_kwargs)
 
-    policy = policies.get(policy_params)
-
-    policy_save_path = ExperimentRunner._policy_save_path(checkpoint_dir)
-    status = policy.load_weights(policy_save_path)
-    status.assert_consumed().run_restore_ops()
-
-    return policy
-
-
-def simulate_policy(checkpoint_path,
-                    num_rollouts,
-                    max_path_length,
-                    render_kwargs,
-                    video_save_path=None,
-                    evaluation_environment_params=None):
-    checkpoint_path = os.path.abspath(checkpoint_path.rstrip('/'))
-    variant, progress, metadata = load_variant_progress_metadata(
-        checkpoint_path)
-    environment = load_environment(variant)
-    policy = load_policy(checkpoint_path, variant, environment)
-    render_kwargs = {**DEFAULT_RENDER_KWARGS, **render_kwargs}
-
-    paths = rollouts(num_rollouts,
-                     environment,
-                     policy,
-                     path_length=max_path_length,
-                     render_kwargs=render_kwargs)
-
-    if video_save_path and render_kwargs.get('mode') == 'rgb_array':
-        fps = 1 // getattr(environment, 'dt', 1/30)
+    if args.render_kwargs.get('mode') == 'rgb_array':
+        fps = 1 // getattr(evaluation_environment, 'dt', 1/30)
         for i, path in enumerate(paths):
             video_save_dir = os.path.expanduser('/tmp/simulate_policy/')
             video_save_path = os.path.join(video_save_dir, f'episode_{i}.mp4')
@@ -119,6 +84,5 @@ def simulate_policy(checkpoint_path,
 
 
 if __name__ == '__main__':
-    set_gpu_memory_growth(True)
     args = parse_args()
-    simulate_policy(**vars(args))
+    simulate_policy(args)

@@ -1,7 +1,9 @@
 import tensorflow as tf
 import tensorflow_probability as tfp
+from tensorflow.python.keras.engine import training_utils
 
-from softlearning.utils.tensorflow import cast_and_concat
+from softlearning.utils.keras import PicklableSequential
+from softlearning.utils.tensorflow import nest
 
 
 tfk = tf.keras
@@ -12,17 +14,20 @@ tfb = tfp.bijectors
 
 
 def feedforward_model(hidden_layer_sizes,
-                      output_shape,
+                      output_size,
                       activation='relu',
                       output_activation='linear',
                       preprocessors=None,
                       name='feedforward_model',
                       *args,
                       **kwargs):
-    output_size = tf.reduce_prod(output_shape)
-    if 1 < len(output_shape):
-        raise NotImplementedError("TODO(hartikainen)")
-    model = tf.keras.Sequential((
+    def cast_and_concat(x):
+        x = nest.map_structure(training_utils.cast_if_floating_dtype, x)
+        x = nest.flatten(x)
+        x = tf.concat(x, axis=-1)
+        return x
+
+    model = PicklableSequential((
         tfkl.Lambda(cast_and_concat),
         *[
             tf.keras.layers.Dense(
@@ -30,8 +35,7 @@ def feedforward_model(hidden_layer_sizes,
             for hidden_layer_size in hidden_layer_sizes
         ],
         tf.keras.layers.Dense(
-            output_size, *args, activation=output_activation, **kwargs),
-        # tf.keras.layers.Reshape(output_shape),
+            output_size, *args, activation=output_activation, **kwargs)
     ), name=name)
 
     return model

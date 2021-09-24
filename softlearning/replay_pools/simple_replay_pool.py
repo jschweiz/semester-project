@@ -1,19 +1,6 @@
-from gym import spaces
-import tree
+from gym.spaces import Dict
 
 from .flexible_replay_pool import FlexibleReplayPool, Field
-
-
-def field_from_gym_space(name, space):
-    if isinstance(space, spaces.Box):
-        if isinstance(name, (list, tuple)):
-            name = '/'.join(name)
-        return Field(name=name, dtype=space.dtype, shape=space.shape)
-    elif isinstance(space, spaces.Dict):
-        return tree.map_structure_with_path(
-            field_from_gym_space, space.spaces)
-    else:
-        raise NotImplementedError(space)
 
 
 class SimpleReplayPool(FlexibleReplayPool):
@@ -25,20 +12,33 @@ class SimpleReplayPool(FlexibleReplayPool):
         extra_fields = extra_fields or {}
         observation_space = environment.observation_space
         action_space = environment.action_space
+        assert isinstance(observation_space, Dict), observation_space
 
         self._environment = environment
         self._observation_space = observation_space
         self._action_space = action_space
 
         fields = {
-            'observations': field_from_gym_space(
-                'observations', observation_space),
-            'next_observations': field_from_gym_space(
-                'next_observations', observation_space),
+            'observations': {
+                name: Field(
+                    name=name,
+                    dtype=observation_space.dtype,
+                    shape=observation_space.shape)
+                for name, observation_space
+                in observation_space.spaces.items()
+            },
+            'next_observations': {
+                name: Field(
+                    name=name,
+                    dtype=observation_space.dtype,
+                    shape=observation_space.shape)
+                for name, observation_space
+                in observation_space.spaces.items()
+            },
             'actions': Field(
                 name='actions',
                 dtype=action_space.dtype,
-                shape=environment.action_space.shape),
+                shape=action_space.shape),
             'rewards': Field(
                 name='rewards',
                 dtype='float32',
@@ -47,6 +47,10 @@ class SimpleReplayPool(FlexibleReplayPool):
             'terminals': Field(
                 name='terminals',
                 dtype='bool',
+                shape=(1, )),
+            'episodes': Field(
+                name='episodes',
+                dtype='int64',
                 shape=(1, )),
             **extra_fields
         }

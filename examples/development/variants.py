@@ -1,57 +1,80 @@
-
 from copy import deepcopy
 
 from ray import tune
 import numpy as np
 
-from softlearning.utils.git import get_git_rev
-from softlearning.utils.misc import get_host_name
-from softlearning.utils.dict import deep_update
+from softlearning.misc.utils import get_git_rev, deep_update
 
 DEFAULT_KEY = "__DEFAULT_KEY__"
 
 M = 256
+REPARAMETERIZE = True
+NUM_CHECKPOINTS = 10
 NUM_COUPLING_LAYERS = 2
 
+# Hyperparameters for LILI
+continuous = True
+pretrain_iters = 10000
+task_batch_size = 32
+per_task_batch_size = 8
+latent_dim = 8
+episode_length = 50
+total_interactions = 4000
+
+GAUSSIAN_POLICY_PARAMS_BASE = {
+    'type': 'GaussianPolicy',
+    'kwargs': {
+        'hidden_layer_sizes': (M, M),
+        'squash': True,
+        'latent_dim': latent_dim,
+        'observation_keys': None,
+        'observation_preprocessors_params': {}
+    }
+}
 
 ALGORITHM_PARAMS_BASE = {
-    'config': {
+    'type': 'SAC',
+
+    'kwargs': {
+        'epoch_length': 1000,
         'train_every_n_steps': 1,
         'n_train_repeat': 1,
         'eval_render_kwargs': {},
-        'eval_n_episodes': 1,
-        'num_warmup_samples': tune.sample_from(lambda spec: (
-            10 * (spec.get('config', spec)
-                  ['sampler_params']
-                  ['config']
-                  ['max_path_length'])
-        )),
+        'eval_n_episodes': 0,
+        'eval_deterministic': True,
+
+        'discount': 0.99,
+        'tau': 5e-3,
+        'reward_scale': 1.0,
+
+        'continuous': continuous,
+        'pretrain_iters': pretrain_iters,
+        'per_task_batch_size': per_task_batch_size,
+        'latent_dim': latent_dim,
+        'episode_length': episode_length,
     }
 }
 
 
 ALGORITHM_PARAMS_ADDITIONAL = {
     'SAC': {
-        'class_name': 'SAC',
-        'config': {
-            'policy_lr': 3e-4,
-            'Q_lr': 3e-4,
-            'alpha_lr': 3e-4,
+        'type': 'SAC',
+        'kwargs': {
+            'reparameterize': REPARAMETERIZE,
+            'lr': 3e-4,
             'target_update_interval': 1,
             'tau': 5e-3,
-            'target_entropy': 'auto',
-
-            'discount': 0.99,
-            'reward_scale': 1.0,
-        },
+            'target_entropy': 0,
+            'action_prior': 'uniform',
+            'n_initial_exploration_steps': int(1e3),
+        }
     },
     'SQL': {
-        'class_name': 'SQL',
-        'config': {
+        'type': 'SQL',
+        'kwargs': {
             'policy_lr': 3e-4,
             'target_update_interval': 1,
-            'discount': 0.99,
-            'tau': 5e-3,
+            'n_initial_exploration_steps': int(1e3),
             'reward_scale': tune.sample_from(lambda spec: (
                 {
                     'Swimmer': 30,
@@ -69,151 +92,8 @@ ALGORITHM_PARAMS_ADDITIONAL = {
                     1.0
                 ),
             )),
-        },
-    },
-}
-
-
-GAUSSIAN_POLICY_PARAMS_BASE = {
-    'class_name': 'FeedforwardGaussianPolicy',
-    'config': {
-        'hidden_layer_sizes': (M, M),
-        'squash': True,
-        'observation_keys': None,
-        'preprocessors': None,
+        }
     }
-}
-
-TOTAL_STEPS_PER_UNIVERSE_DOMAIN_TASK = {
-    DEFAULT_KEY: int(1e4),
-    'gym': {
-        DEFAULT_KEY: int(1e4),
-        'Swimmer': {
-            DEFAULT_KEY: int(1e3),
-            'v3': int(1e3),
-        },
-        'Hopper': {
-            DEFAULT_KEY: int(1e6),
-            'v3': int(1e6),
-        },
-        'HalfCheetah': {
-            DEFAULT_KEY: int(3e6),
-            'v3': int(3e6),
-        },
-        'Walker2d': {
-            DEFAULT_KEY: int(3e6),
-            'v3': int(3e6),
-        },
-        'Ant': {
-            DEFAULT_KEY: int(3e6),
-            'v3': int(3e6),
-        },
-        'Humanoid': {
-            DEFAULT_KEY: int(1e7),
-            'Stand-v3': int(1e7),
-            'SimpleStand-v3': int(1e7),
-            'v3': int(1e7),
-        },
-        'Pendulum': {
-            DEFAULT_KEY: int(1e4),
-            'v3': int(1e4),
-        },
-        'Point2DEnv': {
-            DEFAULT_KEY: int(5e4),
-        },
-    },
-    'dm_control': {
-        # BENCHMARKING
-        DEFAULT_KEY: int(3e6),
-        'acrobot': {
-            DEFAULT_KEY: int(3e6),
-            # 'swingup': int(None),
-            # 'swingup_sparse': int(None),
-        },
-        'ball_in_cup': {
-            DEFAULT_KEY: int(3e6),
-            # 'catch': int(None),
-        },
-        'cartpole': {
-            DEFAULT_KEY: int(3e6),
-            # 'balance': int(None),
-            # 'balance_sparse': int(None),
-            # 'swingup': int(None),
-            # 'swingup_sparse': int(None),
-            # 'three_poles': int(None),
-            # 'two_poles': int(None),
-        },
-        'cheetah': {
-            DEFAULT_KEY: int(3e6),
-            'run': int(1e7),
-        },
-        'finger': {
-            DEFAULT_KEY: int(3e6),
-            # 'spin': int(None),
-            # 'turn_easy': int(None),
-            # 'turn_hard': int(None),
-        },
-        'fish': {
-            DEFAULT_KEY: int(3e6),
-            # 'upright': int(None),
-            # 'swim': int(None),
-        },
-        'hopper': {
-            DEFAULT_KEY: int(3e6),
-            # 'stand': int(None),
-            'hop': int(1e7),
-        },
-        'humanoid': {
-            DEFAULT_KEY: int(1e7),
-            'stand': int(1e7),
-            'walk': int(1e7),
-            'run': int(1e7),
-            # 'run_pure_state': int(1e7),
-        },
-        'manipulator': {
-            DEFAULT_KEY: int(3e6),
-            'bring_ball': int(1e7),
-            # 'bring_peg': int(None),
-            # 'insert_ball': int(None),
-            # 'insert_peg': int(None),
-        },
-        'pendulum': {
-            DEFAULT_KEY: int(3e6),
-            # 'swingup': int(None),
-        },
-        'point_mass': {
-            DEFAULT_KEY: int(3e6),
-            # 'easy': int(None),
-            # 'hard': int(None),
-        },
-        'reacher': {
-            DEFAULT_KEY: int(3e6),
-            # 'easy': int(None),
-            # 'hard': int(None),
-        },
-        'swimmer': {
-            DEFAULT_KEY: int(3e6),
-            # 'swimmer6': int(None),
-            # 'swimmer15': int(None),
-        },
-        'walker': {
-            DEFAULT_KEY: int(1e6),
-            'stand': int(1e6),
-            'walk': int(1e6),
-            'run': int(1e6),
-        },
-        # EXTRA
-        'humanoid_CMU': {
-            DEFAULT_KEY: int(3e6),
-            'run': int(1e7),
-            # 'stand': int(None),
-        },
-        'quadruped': {
-            DEFAULT_KEY: int(3e6),
-            'run': int(1e7),
-            'walk': int(1e7),
-        },
-    },
 }
 
 
@@ -221,6 +101,12 @@ MAX_PATH_LENGTH_PER_UNIVERSE_DOMAIN_TASK = {
     DEFAULT_KEY: 1000,
     'gym': {
         DEFAULT_KEY: 1000,
+        'EpisodicPointMass': {
+            DEFAULT_KEY: episode_length,
+        },
+        'ContinuousPointMass': {
+            DEFAULT_KEY: episode_length,
+        },
         'Point2DEnv': {
             DEFAULT_KEY: 50,
         },
@@ -230,18 +116,62 @@ MAX_PATH_LENGTH_PER_UNIVERSE_DOMAIN_TASK = {
     },
 }
 
-EPOCH_LENGTH_PER_UNIVERSE_DOMAIN_TASK = {
-    DEFAULT_KEY: 1000,
+NUM_EPOCHS_PER_UNIVERSE_DOMAIN_TASK = {
+    DEFAULT_KEY: 200,
     'gym': {
-        DEFAULT_KEY: 25000,
+        DEFAULT_KEY: 200,
+        'Swimmer': {
+            DEFAULT_KEY: int(3e2),
+        },
+        'Hopper': {
+            DEFAULT_KEY: int(1e3),
+        },
+        'HalfCheetah': {
+            DEFAULT_KEY: int(3e3),
+        },
+        'Walker2d': {
+            DEFAULT_KEY: int(3e3),
+        },
+        'Ant': {
+            DEFAULT_KEY: int(3e3),
+        },
+        'Humanoid': {
+            DEFAULT_KEY: int(1e4),
+        },
+        'Pusher2d': {
+            DEFAULT_KEY: int(2e3),
+        },
+        'HandManipulatePen': {
+            DEFAULT_KEY: int(1e4),
+        },
+        'HandManipulateEgg': {
+            DEFAULT_KEY: int(1e4),
+        },
+        'HandManipulateBlock': {
+            DEFAULT_KEY: int(1e4),
+        },
+        'HandReach': {
+            DEFAULT_KEY: int(1e4),
+        },
         'Pendulum': {
-            DEFAULT_KEY: 1000,
-            'v0': 1000,
+            DEFAULT_KEY: 10,
         },
     },
     'dm_control': {
-        DEFAULT_KEY: 25000,
+        DEFAULT_KEY: 200,
+        'ball_in_cup': {
+            DEFAULT_KEY: int(2e4),
+        },
+        'cheetah': {
+            DEFAULT_KEY: int(2e4),
+        },
+        'finger': {
+            DEFAULT_KEY: int(2e4),
+        },
     },
+    'robosuite': {
+        DEFAULT_KEY: 200,
+    }
 }
 
 
@@ -297,17 +227,41 @@ ENVIRONMENT_PARAMS_PER_UNIVERSE_DOMAIN_TASK = {
         },
         'Point2DEnv': {
             'Default-v0': {
-                'observation_keys': ('observation', 'desired_goal'),
+                # 'observation_keys': ('observation', 'desired_goal'),
+                'observation_keys': ('observations',),
             },
             'Wall-v0': {
                 'observation_keys': ('observation', 'desired_goal'),
             },
+        },
+        'Sawyer': {
+            task_name: {
+                'has_renderer': False,
+                'has_offscreen_renderer': False,
+                'use_camera_obs': False,
+                'reward_shaping': tune.grid_search([True, False]),
+            }
+            for task_name in (
+                    'Lift',
+                    'NutAssembly',
+                    'NutAssemblyRound',
+                    'NutAssemblySingle',
+                    'NutAssemblySquare',
+                    'PickPlace',
+                    'PickPlaceBread',
+                    'PickPlaceCan',
+                    'PickPlaceCereal',
+                    'PickPlaceMilk',
+                    'PickPlaceSingle',
+                    'Stack',
+            )
         },
     },
     'dm_control': {
         'ball_in_cup': {
             'catch': {
                 'pixel_wrapper_kwargs': {
+                    'observation_key': 'pixels',
                     'pixels_only': True,
                     'render_kwargs': {
                         'width': 84,
@@ -320,6 +274,7 @@ ENVIRONMENT_PARAMS_PER_UNIVERSE_DOMAIN_TASK = {
         'cheetah': {
             'run': {
                 'pixel_wrapper_kwargs': {
+                    'observation_key': 'pixels',
                     'pixels_only': True,
                     'render_kwargs': {
                         'width': 84,
@@ -332,6 +287,7 @@ ENVIRONMENT_PARAMS_PER_UNIVERSE_DOMAIN_TASK = {
         'finger': {
             'spin': {
                 'pixel_wrapper_kwargs': {
+                    'observation_key': 'pixels',
                     'pixels_only': True,
                     'render_kwargs': {
                         'width': 84,
@@ -345,8 +301,8 @@ ENVIRONMENT_PARAMS_PER_UNIVERSE_DOMAIN_TASK = {
 }
 
 
-def get_epoch_length(universe, domain, task):
-    level_result = EPOCH_LENGTH_PER_UNIVERSE_DOMAIN_TASK.copy()
+def get_num_epochs(universe, domain, task):
+    level_result = NUM_EPOCHS_PER_UNIVERSE_DOMAIN_TASK.copy()
     for level_key in (universe, domain, task):
         if isinstance(level_result, int):
             return level_result
@@ -367,49 +323,41 @@ def get_max_path_length(universe, domain, task):
     return level_result
 
 
+def get_initial_exploration_steps(spec):
+    config = spec.get('config', spec)
+    initial_exploration_steps = 10 * (
+        config
+        ['sampler_params']
+        ['kwargs']
+        ['max_path_length']
+    )
+
+    return initial_exploration_steps
+
+
 def get_checkpoint_frequency(spec):
-    num_checkpoints = 10
     config = spec.get('config', spec)
     checkpoint_frequency = (
         config
         ['algorithm_params']
-        ['config']
+        ['kwargs']
         ['n_epochs']
-    ) // num_checkpoints
+    ) // NUM_CHECKPOINTS
 
     return checkpoint_frequency
 
 
-def get_policy_params(spec):
-    # config = spec.get('config', spec)
+def get_policy_params(universe, domain, task):
     policy_params = GAUSSIAN_POLICY_PARAMS_BASE.copy()
     return policy_params
 
 
-def get_total_timesteps(universe, domain, task):
-    level_result = TOTAL_STEPS_PER_UNIVERSE_DOMAIN_TASK.copy()
-    for level_key in (universe, domain, task):
-        if isinstance(level_result, (int, float)):
-            return level_result
-
-        level_result = (
-            level_result.get(level_key)
-            or level_result[DEFAULT_KEY])
-
-    return level_result
-
-
 def get_algorithm_params(universe, domain, task):
-    total_timesteps = get_total_timesteps(universe, domain, task)
-    epoch_length = get_epoch_length(universe, domain, task)
-    n_epochs = total_timesteps / epoch_length
-    assert n_epochs == int(n_epochs), (n_epochs, total_timesteps, epoch_length)
     algorithm_params = {
-        'config': {
-            'n_epochs': int(n_epochs),
-            'epoch_length': epoch_length,
-            'min_pool_size': get_max_path_length(universe, domain, task),
-            'batch_size': 256,
+        'kwargs': {
+            'n_epochs': get_num_epochs(universe, domain, task),
+            'n_initial_exploration_steps': tune.sample_from(
+                get_initial_exploration_steps),
         }
     }
 
@@ -427,8 +375,8 @@ def get_environment_params(universe, domain, task):
 def get_variant_spec_base(universe, domain, task, policy, algorithm):
     algorithm_params = deep_update(
         ALGORITHM_PARAMS_BASE,
-        ALGORITHM_PARAMS_ADDITIONAL.get(algorithm, {}),
         get_algorithm_params(universe, domain, task),
+        ALGORITHM_PARAMS_ADDITIONAL.get(algorithm, {}),
     )
     variant_spec = {
         'git_sha': get_git_rev(__file__),
@@ -446,60 +394,48 @@ def get_variant_spec_base(universe, domain, task, policy, algorithm):
                 ['training']
             )),
         },
-        # 'policy_params': tune.sample_from(get_policy_params),
-        'policy_params': {
-            'class_name': 'FeedforwardGaussianPolicy',
-            'config': {
-                'hidden_layer_sizes': (M, M),
-                'squash': True,
-                'observation_keys': None,
-                'preprocessors': None,
-            },
-        },
+        'policy_params': get_policy_params(universe, domain, task),
         'exploration_policy_params': {
-            'class_name': 'ContinuousUniformPolicy',
-            'config': {
+            'type': 'UniformPolicy',
+            'kwargs': {
                 'observation_keys': tune.sample_from(lambda spec: (
                     spec.get('config', spec)
                     ['policy_params']
-                    ['config']
+                    ['kwargs']
                     .get('observation_keys')
-                ))
+                )),
+                'latent_dim': latent_dim,
             },
         },
         'Q_params': {
-            'class_name': 'double_feedforward_Q_function',
-            'config': {
+            'type': 'double_feedforward_Q_function',
+            'kwargs': {
                 'hidden_layer_sizes': (M, M),
                 'observation_keys': None,
-                'preprocessors': None,
-            },
+                'observation_preprocessors_params': {},
+                'latent_dim': latent_dim,
+            }
         },
         'algorithm_params': algorithm_params,
         'replay_pool_params': {
-            'class_name': 'SimpleReplayPool',
-            'config': {
-                'max_size': tune.sample_from(lambda spec: (
-                    min(int(1e6),
-                        spec.get('config', spec)
-                        ['algorithm_params']
-                        ['config']
-                        ['n_epochs']
-                        * spec.get('config', spec)
-                        ['algorithm_params']
-                        ['config']
-                        ['epoch_length'])
-                )),
-            },
+            'type': 'MultitaskReplayPool',
+            'kwargs': {
+                'max_size': int(episode_length),
+                'episode_length': episode_length,
+                'total_tasks': total_interactions,
+                'per_task_batch_size': per_task_batch_size,
+            }
         },
         'sampler_params': {
-            'class_name': 'SimpleSampler',
-            'config': {
+            'type': 'SimpleSampler',
+            'kwargs': {
                 'max_path_length': get_max_path_length(universe, domain, task),
+                'min_pool_size': get_max_path_length(universe, domain, task),
+                'batch_size': task_batch_size * per_task_batch_size,
+                'latent_dim': latent_dim,
             }
         },
         'run_params': {
-            'host_name': get_host_name(),
             'seed': tune.sample_from(
                 lambda spec: np.random.randint(0, 10000)),
             'checkpoint_at_end': True,
@@ -512,8 +448,10 @@ def get_variant_spec_base(universe, domain, task, policy, algorithm):
 
 
 def is_image_env(universe, domain, task, variant_spec):
-    return 'pixel_wrapper_kwargs' in (
-        variant_spec['environment_params']['training']['kwargs'])
+    return ('image' in task.lower()
+            or 'image' in domain.lower()
+            or 'pixel_wrapper_kwargs' in (
+                variant_spec['environment_params']['training']['kwargs']))
 
 
 def get_variant_spec_image(universe,
@@ -528,8 +466,8 @@ def get_variant_spec_image(universe,
 
     if is_image_env(universe, domain, task, variant_spec):
         preprocessor_params = {
-            'class_name': 'convnet_preprocessor',
-            'config': {
+            'type': 'convnet_preprocessor',
+            'kwargs': {
                 'conv_filters': (64, ) * 3,
                 'conv_kernel_sizes': (3, ) * 3,
                 'conv_strides': (2, ) * 3,
@@ -538,28 +476,29 @@ def get_variant_spec_image(universe,
             },
         }
 
-        variant_spec['policy_params']['config']['hidden_layer_sizes'] = (M, M)
-        variant_spec['policy_params']['config']['preprocessors'] = {
-            'pixels': deepcopy(preprocessor_params)
-        }
+        variant_spec['policy_params']['kwargs']['hidden_layer_sizes'] = (M, M)
+        variant_spec['policy_params']['kwargs'][
+            'observation_preprocessors_params'] = {
+                'pixels': deepcopy(preprocessor_params)
+            }
 
-        variant_spec['Q_params']['config']['hidden_layer_sizes'] = (
+        variant_spec['Q_params']['kwargs']['hidden_layer_sizes'] = (
             tune.sample_from(lambda spec: (deepcopy(
                 spec.get('config', spec)
                 ['policy_params']
-                ['config']
+                ['kwargs']
                 ['hidden_layer_sizes']
             )))
         )
-        variant_spec['Q_params']['config']['preprocessors'] = tune.sample_from(
-            lambda spec: (
-                deepcopy(
+        variant_spec['Q_params']['kwargs'][
+            'observation_preprocessors_params'] = (
+                tune.sample_from(lambda spec: (deepcopy(
                     spec.get('config', spec)
                     ['policy_params']
-                    ['config']
-                    ['preprocessors']),
-                None,  # Action preprocessor is None
-            ))
+                    ['kwargs']
+                    ['observation_preprocessors_params']
+                )))
+            )
 
     return variant_spec
 

@@ -1,1 +1,2 @@
-from .rescale_observation import RescaleObservation  # noqa: unused-import
+from .normalize_action import NormalizeActionWrapper
+from .pixel_observation import PixelObservationWrapper

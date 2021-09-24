@@ -1,5 +1,4 @@
 import numpy as np
-from gym import utils
 
 from softlearning.environments.helpers import random_point_in_circle
 from .pusher_2d import Pusher2dEnv
@@ -7,7 +6,7 @@ from .pusher_2d import Pusher2dEnv
 
 class ImagePusher2dEnv(Pusher2dEnv):
     def __init__(self, image_shape, *args, **kwargs):
-        utils.EzPickle.__init__(**locals())
+        self._Serializable__initialize(locals())
         self.image_shape = image_shape
         Pusher2dEnv.__init__(self, *args, **kwargs)
 
@@ -50,7 +49,7 @@ class ImageForkReacher2dEnv(ImagePusher2dEnv):
                  arm_object_distance_cost_coeff,
                  *args,
                  **kwargs):
-        utils.EzPickle.__init__(**locals())
+        self._Serializable__initialize(locals())
 
         self._arm_goal_distance_cost_coeff = arm_goal_distance_cost_coeff
         self._arm_object_distance_cost_coeff = arm_object_distance_cost_coeff
