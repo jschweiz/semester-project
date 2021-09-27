@@ -1,2 +1,4 @@
 ray_results/*
 results/*
+**/__pycache__/*
+softlearning.egg-info/*
